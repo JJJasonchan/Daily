@@ -120,22 +120,33 @@ final class NotificationServiceTests: XCTestCase {
         XCTAssertFalse(center.pending.contains { $0.identifier == NotificationID.daily })
     }
 
-    func testRebuildRemovesStaleTaskRequestsAndSchedulesOnlyIncompleteTasks() async throws {
-        let incomplete = makeTask(reminderMode: .once, hour: 10, minute: 30)
-        let completed = makeTask(reminderMode: .once, hour: 10, minute: 45, completedAt: date(2026, 8, 12, 9, 0))
-        let stale = request(id: "task.11111111-2222-3333-4444-555555555555.3")
+    func testRebuildRemovesStaleTaskRequestsAndSchedulesOnlyTodaysIncompleteTasks() async throws {
+        let todayIncomplete = makeTask(reminderMode: .persistent, hour: 8, minute: 0)
+        let yesterdayIncomplete = makeTask(dayKey: "2026-08-11", reminderMode: .persistent, hour: 8, minute: 0)
+        let todayCompleted = makeTask(
+            reminderMode: .persistent,
+            hour: 8,
+            minute: 0,
+            completedAt: date(2026, 8, 12, 9, 0)
+        )
+        let stale = request(id: NotificationID.task(yesterdayIncomplete.id, sequence: 7))
         let unrelated = request(id: "other.pending")
         let center = RecordingNotificationCenter(pending: [stale, unrelated])
         let service = NotificationService(center: center, calendar: calendar)
 
         try await service.rebuild(
-            tasks: [completed, incomplete],
+            tasks: [yesterdayIncomplete, todayCompleted, todayIncomplete],
             settings: AppSettings(persistentIntervalMinutes: 15),
             now: date(2026, 8, 12, 10, 0)
         )
 
         XCTAssertTrue(center.removedIDs.contains(stale.identifier))
-        XCTAssertEqual(center.addedRequests.map(\.identifier), [NotificationID.task(incomplete.id, sequence: 0)])
+        let expectedTaskIDs = (0..<8).map { NotificationID.task(todayIncomplete.id, sequence: $0) }
+        XCTAssertEqual(center.addedRequests.map(\.identifier), expectedTaskIDs)
+        XCTAssertEqual(
+            center.pending.map(\.identifier).filter { $0.hasPrefix("task.") },
+            expectedTaskIDs
+        )
         XCTAssertTrue(center.pending.contains { $0.identifier == unrelated.identifier })
         XCTAssertEqual(center.requestAuthorizationCallCount, 0)
     }

@@ -133,7 +133,8 @@ public final class NotificationService: NotificationScheduling {
             center.removePending(ids: staleIDs)
         }
 
-        for task in tasks where task.completedAt == nil {
+        let todayKey = LocalDay(date: now, calendar: calendar).rawValue
+        for task in tasks where task.dayKey == todayKey && task.completedAt == nil {
             try await sync(task: task, persistentIntervalMinutes: settings.persistentIntervalMinutes, now: now)
         }
         try await syncDailyReminder(settings: settings, now: now)
