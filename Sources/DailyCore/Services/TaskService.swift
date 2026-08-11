@@ -23,7 +23,7 @@ public final class TaskService {
     }
 
     public func recurringTemplates() throws -> [TaskTemplate] {
-        try repository.templates(enabledOnly: true).filter { $0.kind == .recurring }
+        try repository.templates(enabledOnly: false).filter { $0.kind == .recurring }
     }
 
     public func create(_ draft: TaskDraft, on day: LocalDay, now: Date) async throws -> DailyTask {

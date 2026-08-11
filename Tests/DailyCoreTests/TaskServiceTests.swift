@@ -60,6 +60,37 @@ final class TaskServiceTests: XCTestCase {
         XCTAssertTrue(repository.storedTemplates.isEmpty)
     }
 
+    func testRecurringTemplatesIncludesEnabledAndDisabledRecurringButExcludesOneTime() throws {
+        let enabled = recurringTemplate(title: "Enabled")
+        enabled.sortIndex = 0
+        let disabled = recurringTemplate(title: "Disabled")
+        disabled.sortIndex = 1_000
+        disabled.isEnabled = false
+        let oneTime = TaskTemplate(title: "Once", kind: .once, sortIndex: 2_000)
+        let repository = TestTaskRepository(templates: [oneTime, disabled, enabled])
+        let service = TaskService(repository: repository, notifications: RecordingNotificationScheduler())
+
+        let templates = try service.recurringTemplates()
+
+        XCTAssertEqual(templates.map(\.id), [enabled.id, disabled.id])
+    }
+
+    func testDisabledRecurringTemplateRemainsQueryableAndCanBeReenabled() throws {
+        let template = recurringTemplate(title: "Exercise")
+        let repository = TestTaskRepository(templates: [template])
+        let service = TaskService(repository: repository, notifications: RecordingNotificationScheduler())
+
+        try service.setTemplateEnabled(id: template.id, enabled: false)
+
+        XCTAssertEqual(try service.recurringTemplates().map(\.id), [template.id])
+        XCTAssertFalse(template.isEnabled)
+
+        try service.setTemplateEnabled(id: template.id, enabled: true)
+
+        XCTAssertEqual(try service.recurringTemplates().map(\.id), [template.id])
+        XCTAssertTrue(template.isEnabled)
+    }
+
     func testUpdateChangesTemplateAndTodaysIncompleteSnapshot() async throws {
         let template = recurringTemplate(title: "Old", reminderMode: .once, hour: 8, minute: 0)
         let task = DailyTask(
