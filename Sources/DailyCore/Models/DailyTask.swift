@@ -7,7 +7,7 @@ public final class DailyTask {
     public var templateID: UUID
     public var dayKey: String
     public var titleSnapshot: String
-    public var reminderModeRaw: String
+    private var reminderModeRaw: String
     public var reminderHour: Int?
     public var reminderMinute: Int?
     public var sortIndex: Int

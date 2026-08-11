@@ -5,9 +5,9 @@ import SwiftData
 public final class TaskTemplate {
     @Attribute(.unique) public var id: UUID
     public var title: String
-    public var kindRaw: String
-    public var recurrenceData: Data?
-    public var reminderModeRaw: String
+    private var kindRaw: String
+    private var recurrenceData: Data?
+    private var reminderModeRaw: String
     public var reminderHour: Int?
     public var reminderMinute: Int?
     public var sortIndex: Int
