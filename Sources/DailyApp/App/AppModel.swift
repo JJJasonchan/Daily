@@ -163,6 +163,7 @@ final class AppModel {
     var editorTaskID: UUID?
     var editorTemplateID: UUID?
     var isPresentingNewTask = false
+    private(set) var quickAddFocusRequestID: UUID?
 
     private let taskService: TaskService
     private let rolloverService: DayRolloverService
@@ -631,6 +632,11 @@ final class AppModel {
 
     func clearError() {
         errorMessage = nil
+    }
+
+    func requestQuickAddFocus() {
+        destination = .today
+        quickAddFocusRequestID = UUID()
     }
 
     func stopObservingLifecycle() {

@@ -37,6 +37,11 @@ struct QuickAddView: View {
         .padding(.horizontal, 14)
         .frame(height: 48)
         .glassModule(interactive: true, cornerRadius: 15)
+        .task(id: model.quickAddFocusRequestID) {
+            guard model.quickAddFocusRequestID != nil else { return }
+            await Task.yield()
+            isFocused = true
+        }
     }
 
     private var trimmedTitle: String {
