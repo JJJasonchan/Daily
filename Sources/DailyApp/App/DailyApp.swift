@@ -83,7 +83,7 @@ struct DailyApp: App {
     var body: some Scene {
         Window("Daily", id: "main") {
             AppShellView(model: sceneState.windowModel)
-                .containerBackground(.ultraThickMaterial, for: .window)
+                .containerBackground(.ultraThinMaterial, for: .window)
                 .focusEffectDisabled()
                 .task {
                     await sceneState.activate()
