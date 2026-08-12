@@ -5,7 +5,9 @@ import Observation
 
 @MainActor
 protocol AppLifecycleObserving: AnyObject {
-    func start(handler: @escaping @MainActor @Sendable () async -> Void)
+    func start(
+        handler: @escaping @MainActor @Sendable () -> Task<Void, Never>?
+    )
     func stop()
 }
 
@@ -23,7 +25,9 @@ final class SystemAppLifecycleObserver: AppLifecycleObserving {
         self.workspaceNotificationCenter = workspaceNotificationCenter
     }
 
-    func start(handler: @escaping @MainActor @Sendable () async -> Void) {
+    func start(
+        handler: @escaping @MainActor @Sendable () -> Task<Void, Never>?
+    ) {
         guard registrations.isEmpty else { return }
 
         let defaultCenterNames: [Notification.Name] = [
@@ -51,11 +55,11 @@ final class SystemAppLifecycleObserver: AppLifecycleObserving {
     private func observe(
         center: NotificationCenter,
         name: Notification.Name,
-        handler: @escaping @MainActor @Sendable () async -> Void
+        handler: @escaping @MainActor @Sendable () -> Task<Void, Never>?
     ) -> NotificationRegistration {
         let token = center.addObserver(forName: name, object: nil, queue: .main) { _ in
-            Task { @MainActor in
-                await handler()
+            MainActor.assumeIsolated {
+                _ = handler()
             }
         }
         return NotificationRegistration(center: center, token: token)
@@ -104,6 +108,10 @@ final class AppModel {
     private let lifecycleObserver: any AppLifecycleObserving
     private let lifetimeAnchor: AnyObject?
     private var isObservingLifecycle = false
+    private var lifecycleGeneration: UInt = 0
+    private var refreshSequence: UInt = 0
+    private var pendingRefresh: RefreshRequest?
+    private var lifecycleRefreshTask: Task<Void, Never>?
 
     init(
         taskService: TaskService,
@@ -136,12 +144,8 @@ final class AppModel {
 
     func start() async {
         startObservingLifecycleIfNeeded()
-        do {
-            try await rolloverService.processThroughToday()
-            try reload()
-        } catch {
-            errorMessage = "更新今日任务失败。请重试。"
-        }
+        let task = requestLifecycleRefresh(expectedGeneration: lifecycleGeneration)
+        await task?.value
     }
 
     func reload() throws {
@@ -156,10 +160,17 @@ final class AppModel {
     func add(_ draft: TaskDraft) async {
         do {
             _ = try await taskService.create(draft, on: today, now: dayProvider.now)
-            try reload()
         } catch {
+            if (error as? TaskServiceError) == .notificationSyncFailed {
+                reloadAfterSavedMutation(
+                    successMessage: "任务已保存，但提醒失败。请重试。"
+                )
+                return
+            }
             errorMessage = addErrorMessage(for: error)
+            return
         }
+        reloadAfterSavedMutation()
     }
 
     func toggle(_ task: DailyTask) async {
@@ -170,15 +181,23 @@ final class AppModel {
                 completed: !wasCompleted,
                 at: dayProvider.now
             )
-            try reload()
-            lastCompletionUndo = (task.id, wasCompleted)
         } catch {
+            if (error as? TaskServiceError) == .notificationSyncFailed {
+                lastCompletionUndo = (task.id, wasCompleted)
+                reloadAfterSavedMutation(
+                    successMessage: "任务状态已更新，但提醒失败。请重试。"
+                )
+                return
+            }
             errorMessage = commandErrorMessage(
                 for: error,
-                notificationMessage: "任务状态已更新，但提醒未能安排。请重试。",
+                notificationMessage: "任务状态已更新，但提醒失败。请重试。",
                 fallback: "更新任务状态失败。请重试。"
             )
+            return
         }
+        lastCompletionUndo = (task.id, wasCompleted)
+        reloadAfterSavedMutation()
     }
 
     func undoLastCompletion() async {
@@ -189,36 +208,46 @@ final class AppModel {
                 completed: undo.wasCompleted,
                 at: dayProvider.now
             )
-            try reload()
-            lastCompletionUndo = nil
         } catch {
+            if (error as? TaskServiceError) == .notificationSyncFailed {
+                lastCompletionUndo = nil
+                reloadAfterSavedMutation(
+                    successMessage: "任务状态已恢复，但提醒失败。请重试。"
+                )
+                return
+            }
             errorMessage = commandErrorMessage(
                 for: error,
-                notificationMessage: "任务状态已恢复，但提醒未能安排。请重试。",
+                notificationMessage: "任务状态已恢复，但提醒失败。请重试。",
                 fallback: "撤销失败。请重试。"
             )
+            return
         }
+        lastCompletionUndo = nil
+        reloadAfterSavedMutation()
     }
 
     func delete(_ task: DailyTask, scope: DeleteScope) async {
         do {
             try await taskService.delete(id: task.id, scope: scope)
-            try reload()
             if lastCompletionUndo?.taskID == task.id {
                 lastCompletionUndo = nil
             }
         } catch {
             errorMessage = "删除任务失败。请重试。"
+            return
         }
+        reloadAfterSavedMutation()
     }
 
     func reorder(ids: [UUID]) {
         do {
             try taskService.reorder(ids: ids)
-            try reload()
         } catch {
             errorMessage = "调整任务顺序失败。请重试。"
+            return
         }
+        reloadAfterSavedMutation()
     }
 
     func clearError() {
@@ -227,8 +256,10 @@ final class AppModel {
 
     func stopObservingLifecycle() {
         guard isObservingLifecycle else { return }
-        lifecycleObserver.stop()
         isObservingLifecycle = false
+        lifecycleGeneration &+= 1
+        pendingRefresh = nil
+        lifecycleObserver.stop()
     }
 
     private var today: LocalDay {
@@ -237,10 +268,59 @@ final class AppModel {
 
     private func startObservingLifecycleIfNeeded() {
         guard !isObservingLifecycle else { return }
-        lifecycleObserver.start { [weak self] in
-            await self?.start()
-        }
+        lifecycleGeneration &+= 1
+        let generation = lifecycleGeneration
         isObservingLifecycle = true
+        lifecycleObserver.start { [weak self] in
+            self?.requestLifecycleRefresh(expectedGeneration: generation)
+        }
+    }
+
+    @discardableResult
+    private func requestLifecycleRefresh(
+        expectedGeneration: UInt
+    ) -> Task<Void, Never>? {
+        guard isObservingLifecycle, expectedGeneration == lifecycleGeneration else {
+            return nil
+        }
+
+        refreshSequence &+= 1
+        pendingRefresh = RefreshRequest(
+            generation: expectedGeneration,
+            sequence: refreshSequence
+        )
+        if lifecycleRefreshTask == nil {
+            lifecycleRefreshTask = Task { @MainActor [weak self] in
+                await self?.drainLifecycleRefreshes()
+            }
+        }
+        return lifecycleRefreshTask
+    }
+
+    private func drainLifecycleRefreshes() async {
+        while let request = pendingRefresh {
+            pendingRefresh = nil
+            guard isCurrent(request) else { continue }
+            await performLifecycleRefresh(request)
+        }
+        lifecycleRefreshTask = nil
+    }
+
+    private func performLifecycleRefresh(_ request: RefreshRequest) async {
+        do {
+            try await rolloverService.processThroughToday()
+            guard isCurrent(request) else { return }
+            try reload()
+        } catch {
+            guard isCurrent(request) else { return }
+            errorMessage = "更新今日任务失败。请重试。"
+        }
+    }
+
+    private func isCurrent(_ request: RefreshRequest) -> Bool {
+        isObservingLifecycle
+            && request.generation == lifecycleGeneration
+            && request.sequence == refreshSequence
     }
 
     private func addErrorMessage(for error: Error) -> String {
@@ -253,7 +333,7 @@ final class AppModel {
         case .recurrenceRequired:
             return "重复任务需要选择重复规则。"
         case .notificationSyncFailed:
-            return "任务已保存，但提醒未能安排。请重试。"
+            return "任务已保存，但提醒失败。请重试。"
         case .taskNotFound, .templateNotFound:
             return "添加任务失败。请重试。"
         }
@@ -268,5 +348,19 @@ final class AppModel {
             return notificationMessage
         }
         return fallback
+    }
+
+    private func reloadAfterSavedMutation(successMessage: String? = nil) {
+        do {
+            try reload()
+            errorMessage = successMessage
+        } catch {
+            errorMessage = "任务已保存，但列表刷新失败。请重试。"
+        }
+    }
+
+    private struct RefreshRequest {
+        let generation: UInt
+        let sequence: UInt
     }
 }

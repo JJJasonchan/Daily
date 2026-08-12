@@ -114,9 +114,53 @@ final class AppModelTests: XCTestCase {
             )
         )
 
-        XCTAssertTrue(fixture.model.todayTasks.isEmpty)
+        XCTAssertEqual(fixture.model.todayTasks.map(\.titleSnapshot), ["Water plants"])
         XCTAssertEqual(fixture.repository.storedTasks.map(\.titleSnapshot), ["Water plants"])
-        XCTAssertEqual(fixture.model.errorMessage, "任务已保存，但提醒未能安排。请重试。")
+        XCTAssertEqual(fixture.model.errorMessage, "任务已保存，但提醒失败。请重试。")
+    }
+
+    func testToggleNotificationFailureReloadsSavedStateAndReplacesPreviousUndo() async throws {
+        let previousTemplate = TaskTemplate(title: "Previous")
+        let currentTemplate = TaskTemplate(title: "Current", isEnabled: false)
+        let previousTask = DailyTask(
+            templateID: previousTemplate.id,
+            dayKey: day.rawValue,
+            titleSnapshot: previousTemplate.title
+        )
+        let currentTask = DailyTask(
+            templateID: currentTemplate.id,
+            dayKey: day.rawValue,
+            titleSnapshot: currentTemplate.title,
+            completedAt: now.addingTimeInterval(-60)
+        )
+        let fixture = makeFixture(
+            templates: [previousTemplate, currentTemplate],
+            tasks: [previousTask, currentTask]
+        )
+        try fixture.model.reload()
+        await fixture.model.toggle(previousTask)
+        let readsBeforePartialSuccess = fixture.repository.dailyTasksCallCount
+        fixture.notifications.shouldFailSync = true
+
+        await fixture.model.toggle(currentTask)
+
+        XCTAssertEqual(fixture.repository.dailyTasksCallCount, readsBeforePartialSuccess + 1)
+        XCTAssertNil(fixture.model.todayTasks.first { $0.id == currentTask.id }?.completedAt)
+        XCTAssertEqual(fixture.model.lastCompletionUndo?.taskID, currentTask.id)
+        XCTAssertEqual(fixture.model.lastCompletionUndo?.wasCompleted, true)
+        XCTAssertEqual(fixture.model.errorMessage, "任务状态已更新，但提醒失败。请重试。")
+    }
+
+    func testCreateSuccessFollowedByReloadFailureDoesNotClaimCreateFailedOrWriteTwice() async {
+        let fixture = makeFixture()
+        fixture.repository.failReadsAfterNextSave = true
+
+        await fixture.model.add(TaskDraft(title: "Saved once"))
+
+        XCTAssertEqual(fixture.repository.storedTasks.map(\.titleSnapshot), ["Saved once"])
+        XCTAssertEqual(fixture.repository.saveCallCount, 1)
+        XCTAssertTrue(fixture.model.todayTasks.isEmpty)
+        XCTAssertEqual(fixture.model.errorMessage, "任务已保存，但列表刷新失败。请重试。")
     }
 
     func testTwoConsumersOfOneModelObserveTheSameArray() async {
@@ -167,6 +211,43 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(fixture.model.todayTasks.map(\.templateID), [template.id])
     }
 
+    func testStoppedModelIgnoresLifecycleCallbackAlreadyQueuedBeforeStop() async {
+        let fixture = makeFixture()
+        await fixture.model.start()
+        let queuedCallback = fixture.lifecycle.capturedHandler()
+        let rebuildsBeforeStop = fixture.notifications.rebuildCallCount
+
+        fixture.model.stopObservingLifecycle()
+        if let queuedTask = queuedCallback?() {
+            await queuedTask.value
+        }
+
+        XCTAssertEqual(fixture.lifecycle.startCallCount, 1)
+        XCTAssertEqual(fixture.notifications.rebuildCallCount, rebuildsBeforeStop)
+    }
+
+    func testOverlappingLifecycleEventsAreSerializedCoalescedAndCommitLatestState() async {
+        let oldTask = DailyTask(templateID: UUID(), dayKey: day.rawValue, titleSnapshot: "Old")
+        let latestTask = DailyTask(templateID: UUID(), dayKey: day.rawValue, titleSnapshot: "Latest")
+        let fixture = makeFixture(tasks: [oldTask])
+        fixture.notifications.blockNextRebuild()
+        let initialRefresh = Task { await fixture.model.start() }
+        await fixture.notifications.waitUntilRebuildIsBlocked()
+
+        let firstEvent = Task { await fixture.lifecycle.sendEvent() }
+        let secondEvent = Task { await fixture.lifecycle.sendEvent() }
+        for _ in 0..<5 { await Task.yield() }
+        fixture.repository.storedTasks = [latestTask]
+        fixture.notifications.resumeBlockedRebuild()
+        await initialRefresh.value
+        await firstEvent.value
+        await secondEvent.value
+
+        XCTAssertEqual(fixture.notifications.maximumConcurrentRebuildCount, 1)
+        XCTAssertEqual(fixture.notifications.rebuildCallCount, 2)
+        XCTAssertEqual(fixture.model.todayTasks.map(\.id), [latestTask.id])
+    }
+
     func testReloadFailureDoesNotReplacePreviouslyLoadedArrays() throws {
         let task = DailyTask(templateID: UUID(), dayKey: day.rawValue, titleSnapshot: "Keep")
         let fixture = makeFixture(tasks: [task])
@@ -185,8 +266,14 @@ final class AppModelTests: XCTestCase {
             workspaceNotificationCenter: workspaceCenter
         )
         var receivedCount = 0
-        observer.start { receivedCount += 1 }
-        observer.start { receivedCount += 100 }
+        observer.start {
+            receivedCount += 1
+            return nil
+        }
+        observer.start {
+            receivedCount += 100
+            return nil
+        }
 
         defaultCenter.post(name: .NSCalendarDayChanged, object: nil)
         defaultCenter.post(name: .NSSystemClockDidChange, object: nil)
@@ -275,6 +362,9 @@ private final class AppModelTestRepository: TaskRepository {
     var storedTasks: [DailyTask]
     let storedSettings: AppSettings
     var shouldFailReads = false
+    var failReadsAfterNextSave = false
+    private(set) var dailyTasksCallCount = 0
+    private(set) var saveCallCount = 0
 
     init(templates: [TaskTemplate], tasks: [DailyTask], settings: AppSettings) {
         storedTemplates = templates
@@ -295,6 +385,7 @@ private final class AppModelTestRepository: TaskRepository {
     }
 
     func dailyTasks(on day: LocalDay) throws -> [DailyTask] {
+        dailyTasksCallCount += 1
         if shouldFailReads { throw Failure.read }
         return storedTasks
             .filter { $0.dayKey == day.rawValue }
@@ -315,13 +406,26 @@ private final class AppModelTestRepository: TaskRepository {
     func insert(_ task: DailyTask) { storedTasks.append(task) }
     func remove(_ task: DailyTask) { storedTasks.removeAll { $0.id == task.id } }
     func settings() throws -> AppSettings { storedSettings }
-    func save() throws {}
+    func save() throws {
+        saveCallCount += 1
+        if failReadsAfterNextSave {
+            failReadsAfterNextSave = false
+            shouldFailReads = true
+        }
+    }
 }
 
 @MainActor
 private final class AppModelNotificationScheduler: NotificationScheduling {
     enum Failure: Error { case sync }
     var shouldFailSync = false
+    private(set) var rebuildCallCount = 0
+    private(set) var maximumConcurrentRebuildCount = 0
+    private var activeRebuildCount = 0
+    private var shouldBlockNextRebuild = false
+    private var blockedRebuildContinuation: CheckedContinuation<Void, Never>?
+    private var blockedStartWaiter: CheckedContinuation<Void, Never>?
+    private var hasBlockedRebuild = false
 
     func sync(task: DailyTask, persistentIntervalMinutes: Int, now: Date) async throws {
         if shouldFailSync { throw Failure.sync }
@@ -334,7 +438,36 @@ private final class AppModelNotificationScheduler: NotificationScheduling {
     }
 
     func rebuild(tasks: [DailyTask], settings: AppSettings, now: Date) async throws {
+        rebuildCallCount += 1
+        activeRebuildCount += 1
+        maximumConcurrentRebuildCount = max(maximumConcurrentRebuildCount, activeRebuildCount)
+        defer { activeRebuildCount -= 1 }
+        if shouldBlockNextRebuild {
+            shouldBlockNextRebuild = false
+            hasBlockedRebuild = true
+            blockedStartWaiter?.resume()
+            blockedStartWaiter = nil
+            await withCheckedContinuation { continuation in
+                blockedRebuildContinuation = continuation
+            }
+        }
         if shouldFailSync { throw Failure.sync }
+    }
+
+    func blockNextRebuild() {
+        shouldBlockNextRebuild = true
+    }
+
+    func waitUntilRebuildIsBlocked() async {
+        if hasBlockedRebuild { return }
+        await withCheckedContinuation { continuation in
+            blockedStartWaiter = continuation
+        }
+    }
+
+    func resumeBlockedRebuild() {
+        blockedRebuildContinuation?.resume()
+        blockedRebuildContinuation = nil
     }
 }
 
@@ -349,11 +482,13 @@ private final class AppModelNotificationCenterClient: NotificationCenterClient {
 
 @MainActor
 private final class ManualAppLifecycleObserver: AppLifecycleObserving {
-    private var handler: (@MainActor () async -> Void)?
+    private var handler: (@MainActor @Sendable () -> Task<Void, Never>?)?
     private(set) var startCallCount = 0
     private(set) var stopCallCount = 0
 
-    func start(handler: @escaping @MainActor () async -> Void) {
+    func start(
+        handler: @escaping @MainActor @Sendable () -> Task<Void, Never>?
+    ) {
         startCallCount += 1
         self.handler = handler
     }
@@ -364,6 +499,12 @@ private final class ManualAppLifecycleObserver: AppLifecycleObserving {
     }
 
     func sendEvent() async {
-        await handler?()
+        if let task = handler?() {
+            await task.value
+        }
+    }
+
+    func capturedHandler() -> (@MainActor @Sendable () -> Task<Void, Never>?)? {
+        handler
     }
 }
