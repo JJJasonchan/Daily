@@ -195,9 +195,7 @@ struct MenuBarContentView: View {
     }
 
     private var visibleUndoToken: CompletionUndoToken? {
-        completionPresentation.visibleUndoToken(
-            currentModelToken: model.lastCompletionUndo
-        )
+        completionPresentation.visibleUndoToken(using: model)
     }
 
     private var effectiveCompletedCount: Int {
@@ -268,6 +266,7 @@ struct MenuBarContentView: View {
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled,
                   !isUndoing,
+                  model.isUndoAvailable(token),
                   visibleUndoToken == token else { return }
             withAnimation(motion.animation) {
                 _ = completionPresentation.dismissUndo(token)
@@ -276,7 +275,9 @@ struct MenuBarContentView: View {
     }
 
     private func undo(_ token: CompletionUndoToken) {
-        guard !isUndoing, visibleUndoToken == token else { return }
+        guard !isUndoing,
+              model.isUndoAvailable(token),
+              visibleUndoToken == token else { return }
         undoDismissalTask?.cancel()
         isUndoing = true
         Task { @MainActor in

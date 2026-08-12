@@ -49,10 +49,9 @@ struct CompletionPresentationState: Equatable, Sendable {
         return true
     }
 
-    func visibleUndoToken(
-        currentModelToken: CompletionUndoToken?
-    ) -> CompletionUndoToken? {
-        guard undoToken == currentModelToken else { return nil }
+    @MainActor
+    func visibleUndoToken(using model: AppModel) -> CompletionUndoToken? {
+        guard let undoToken, model.isUndoAvailable(undoToken) else { return nil }
         return undoToken
     }
 }
@@ -97,7 +96,7 @@ struct TodayView: View {
                 .frame(maxWidth: .infinity)
             }
 
-            if let undoToken = completionPresentation.undoToken {
+            if let undoToken = visibleUndoToken {
                 undoOverlay(for: undoToken)
                     .padding(24)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -217,6 +216,10 @@ struct TodayView: View {
         }
     }
 
+    private var visibleUndoToken: CompletionUndoToken? {
+        completionPresentation.visibleUndoToken(using: model)
+    }
+
     private var effectiveCompletionFraction: Double {
         guard !model.todayTasks.isEmpty else { return 0 }
         return Double(effectiveCompletedCount) / Double(model.todayTasks.count)
@@ -279,7 +282,8 @@ struct TodayView: View {
         undoDismissalTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled,
-                  completionPresentation.undoToken == token else { return }
+                  model.isUndoAvailable(token),
+                  visibleUndoToken == token else { return }
             withAnimation(motion.animation) {
                 _ = completionPresentation.dismissUndo(token)
             }
@@ -287,7 +291,7 @@ struct TodayView: View {
     }
 
     private func undo(_ token: CompletionUndoToken) {
-        guard completionPresentation.undoToken == token else { return }
+        guard model.isUndoAvailable(token), visibleUndoToken == token else { return }
         withAnimation(motion.animation) {
             _ = completionPresentation.dismissUndo(token)
         }

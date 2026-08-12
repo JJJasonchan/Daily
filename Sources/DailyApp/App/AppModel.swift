@@ -180,6 +180,7 @@ final class AppModel {
     private var lifecycleRefreshTask: Task<Void, Never>?
     private var completionCommandTail: Task<Void, Never>?
     private var queuedCompletionCommands: [UUID: QueuedCompletionCommand] = [:]
+    private var latestSubmittedCompletionCommandID: UUID?
 
     init(
         taskService: TaskService,
@@ -211,6 +212,17 @@ final class AppModel {
     }
 
     var currentDay: LocalDay { today }
+
+    var currentUndoToken: CompletionUndoToken? {
+        guard lastCompletionUndo?.sourceCommandID == latestSubmittedCompletionCommandID else {
+            return nil
+        }
+        return lastCompletionUndo
+    }
+
+    func isUndoAvailable(_ token: CompletionUndoToken) -> Bool {
+        currentUndoToken == token
+    }
 
     func history(weekContaining day: LocalDay) throws -> [HistoryDaySummary] {
         let calendar = dayProvider.calendar
@@ -495,6 +507,7 @@ final class AppModel {
     ) -> CompletionCommand {
         let predecessor = completionCommandTail
         let commandID = UUID()
+        latestSubmittedCompletionCommandID = commandID
         queuedCompletionCommands[task.id] = QueuedCompletionCommand(
             id: commandID,
             targetCompletion: completed
@@ -508,6 +521,10 @@ final class AppModel {
                 completed: completed,
                 wasCompleted: !completed
             )
+            if token == nil,
+               latestSubmittedCompletionCommandID == commandID {
+                latestSubmittedCompletionCommandID = lastCompletionUndo?.sourceCommandID
+            }
             if queuedCompletionCommands[task.id]?.id == commandID {
                 queuedCompletionCommands[task.id] = nil
             }
@@ -571,6 +588,9 @@ final class AppModel {
     }
 
     func enqueueUndo(_ token: CompletionUndoToken) -> Task<Void, Never> {
+        guard isUndoAvailable(token) else {
+            return Task {}
+        }
         let predecessor = completionCommandTail
         let command = Task { @MainActor [weak self] in
             await predecessor?.value
@@ -581,7 +601,7 @@ final class AppModel {
     }
 
     private func performUndo(_ token: CompletionUndoToken) async {
-        guard lastCompletionUndo == token else { return }
+        guard isUndoAvailable(token) else { return }
         do {
             try await taskService.setCompleted(
                 id: token.taskID,

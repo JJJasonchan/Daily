@@ -156,14 +156,101 @@ final class MenuBarStateTests: XCTestCase {
         XCTAssertFalse(presentation.complete(firstCommand, token: firstToken))
         XCTAssertEqual(presentation.undoToken, secondToken)
 
-        let otherSurfaceToken = CompletionUndoToken(
-            id: UUID(),
-            sourceCommandID: UUID(),
-            taskID: UUID(),
-            wasCompleted: false
+    }
+
+    func testNewBlockedCompletionImmediatelyInvalidatesPriorUndoAcrossSurfaces() async throws {
+        let fixture = makeTwoTaskFixture()
+        try fixture.model.reload()
+        let firstTask = try XCTUnwrap(fixture.model.todayTasks.first)
+        let secondTask = try XCTUnwrap(fixture.model.todayTasks.last)
+        let firstValue = await fixture.model.toggle(firstTask)
+        let firstToken = try XCTUnwrap(firstValue)
+        var todayState = CompletionPresentationState()
+        var menuState = CompletionPresentationState()
+        let firstCommand = completionCommand(
+            id: firstToken.sourceCommandID,
+            taskID: firstToken.taskID
         )
-        XCTAssertNil(
-            presentation.visibleUndoToken(currentModelToken: otherSurfaceToken)
+        todayState.submit(firstCommand)
+        menuState.submit(firstCommand)
+        XCTAssertTrue(todayState.complete(firstCommand, token: firstToken))
+        XCTAssertTrue(menuState.complete(firstCommand, token: firstToken))
+        XCTAssertEqual(todayState.visibleUndoToken(using: fixture.model), firstToken)
+        XCTAssertEqual(menuState.visibleUndoToken(using: fixture.model), firstToken)
+        fixture.notifications.blockNextCancel()
+
+        let secondCommand = fixture.model.enqueueCompletion(secondTask, completed: true)
+        await fixture.notifications.waitUntilCancelIsBlocked()
+
+        XCTAssertNil(fixture.model.currentUndoToken)
+        XCTAssertFalse(fixture.model.isUndoAvailable(firstToken))
+        XCTAssertNil(todayState.visibleUndoToken(using: fixture.model))
+        XCTAssertNil(menuState.visibleUndoToken(using: fixture.model))
+        let staleUndo = fixture.model.enqueueUndo(firstToken)
+
+        fixture.notifications.resumeBlockedCancel()
+        let secondValue = await secondCommand.value
+        let secondToken = try XCTUnwrap(secondValue)
+        await staleUndo.value
+
+        XCTAssertTrue(fixture.model.isUndoAvailable(secondToken))
+        XCTAssertFalse(fixture.model.isUndoAvailable(firstToken))
+        XCTAssertNotNil(fixture.model.todayTasks.first { $0.id == firstTask.id }?.completedAt)
+    }
+
+    func testFullyFailedCompletionRestoresPriorUndoValidity() async throws {
+        let fixture = makeTwoTaskFixture()
+        try fixture.model.reload()
+        let firstTask = try XCTUnwrap(fixture.model.todayTasks.first)
+        let secondTask = try XCTUnwrap(fixture.model.todayTasks.last)
+        let firstValue = await fixture.model.toggle(firstTask)
+        let firstToken = try XCTUnwrap(firstValue)
+        fixture.repository.failNextDailyTaskRead = true
+
+        let failedCommand = fixture.model.enqueueCompletion(secondTask, completed: true)
+        XCTAssertFalse(fixture.model.isUndoAvailable(firstToken))
+        let failedToken = await failedCommand.value
+
+        XCTAssertNil(failedToken)
+        XCTAssertEqual(fixture.model.currentUndoToken, firstToken)
+        XCTAssertTrue(fixture.model.isUndoAvailable(firstToken))
+        XCTAssertNil(fixture.model.todayTasks.first { $0.id == secondTask.id }?.completedAt)
+    }
+
+    func testNotificationPartialSuccessPermanentlyReplacesPriorUndo() async throws {
+        let fixture = makeTwoTaskFixture(secondCompleted: true)
+        try fixture.model.reload()
+        let firstTask = try XCTUnwrap(fixture.model.todayTasks.first)
+        let secondTask = try XCTUnwrap(fixture.model.todayTasks.last)
+        let firstValue = await fixture.model.toggle(firstTask)
+        let firstToken = try XCTUnwrap(firstValue)
+        fixture.notifications.shouldFailSync = true
+
+        let secondValue = await fixture.model.toggle(secondTask)
+        let secondToken = try XCTUnwrap(secondValue)
+
+        XCTAssertFalse(fixture.model.isUndoAvailable(firstToken))
+        XCTAssertTrue(fixture.model.isUndoAvailable(secondToken))
+        XCTAssertEqual(fixture.model.currentUndoToken, secondToken)
+    }
+
+    private func makeTwoTaskFixture(secondCompleted: Bool = false) -> MenuBarFixture {
+        let firstTemplate = TaskTemplate(title: "第一项")
+        let secondTemplate = TaskTemplate(title: "第二项", isEnabled: !secondCompleted)
+        let firstTask = DailyTask(
+            templateID: firstTemplate.id,
+            dayKey: "2026-08-12",
+            titleSnapshot: firstTemplate.title
+        )
+        let secondTask = DailyTask(
+            templateID: secondTemplate.id,
+            dayKey: "2026-08-12",
+            titleSnapshot: secondTemplate.title,
+            completedAt: secondCompleted ? Date(timeIntervalSince1970: 1_786_521_000) : nil
+        )
+        return makeFixture(
+            templates: [firstTemplate, secondTemplate],
+            tasks: [firstTask, secondTask]
         )
     }
 
@@ -216,6 +303,7 @@ final class MenuBarStateTests: XCTestCase {
         )
         return MenuBarFixture(
             model: model,
+            repository: repository,
             notifications: notifications,
             lifecycle: lifecycle
         )
@@ -225,6 +313,7 @@ final class MenuBarStateTests: XCTestCase {
 @MainActor
 private struct MenuBarFixture {
     let model: AppModel
+    let repository: MenuBarRepository
     let notifications: MenuBarNotificationScheduler
     let lifecycle: MenuBarLifecycleObserver
 }
@@ -234,11 +323,16 @@ private struct MenuBarDayProvider: DayProviding {
     let calendar: Calendar
 }
 
+private enum MenuBarNotificationFailure: Error {
+    case sync
+}
+
 @MainActor
 private final class MenuBarRepository: TaskRepository {
     private var templates: [TaskTemplate]
     private var tasks: [DailyTask]
     private let storedSettings: AppSettings
+    var failNextDailyTaskRead = false
 
     init(
         templates: [TaskTemplate],
@@ -269,7 +363,11 @@ private final class MenuBarRepository: TaskRepository {
     }
 
     func dailyTask(id: UUID) -> DailyTask? {
-        tasks.first { $0.id == id }
+        if failNextDailyTaskRead {
+            failNextDailyTaskRead = false
+            return nil
+        }
+        return tasks.first { $0.id == id }
     }
 
     func insert(_ template: TaskTemplate) { templates.append(template) }
@@ -288,9 +386,11 @@ private final class MenuBarNotificationScheduler: NotificationScheduling {
     private var blockedCancelContinuation: CheckedContinuation<Void, Never>?
     private var blockedCancelWaiter: CheckedContinuation<Void, Never>?
     private var cancelIsBlocked = false
+    var shouldFailSync = false
 
     func sync(task: DailyTask, persistentIntervalMinutes: Int, now: Date) async throws {
         syncedTaskIDs.append(task.id)
+        if shouldFailSync { throw MenuBarNotificationFailure.sync }
     }
     func cancel(taskID: UUID) async {
         guard shouldBlockNextCancel else { return }
