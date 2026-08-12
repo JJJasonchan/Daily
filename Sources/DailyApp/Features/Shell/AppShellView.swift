@@ -9,7 +9,6 @@ struct AppShellView: View {
             SidebarView(model: model)
         } detail: {
             detail
-                .background(.ultraThinMaterial)
         }
         .preferredColorScheme(model.colorSchemeMode.swiftUIColorScheme)
         .navigationSplitViewStyle(.balanced)

@@ -265,7 +265,7 @@ struct TodayView: View {
                 EmptyQuickSuggestion(
                     emoji: "✏️",
                     text: "写下第一个任务",
-                    action: { startInlineAdd() }
+                    action: { model.isPresentingNewTask = true }
                 )
                 EmptyQuickSuggestion(
                     emoji: "⏰",
