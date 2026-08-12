@@ -21,7 +21,7 @@ struct GlassModule: ViewModifier {
                 .background(shape.fill(Color(nsColor: .windowBackgroundColor)))
                 .overlay(
                     shape.strokeBorder(
-                        colorScheme == .dark ? Color.white : Color.black,
+                        .primary,
                         lineWidth: contrast == .increased ? 2 : 1
                     )
                     .opacity(contrast == .increased ? 0.72 : 0.28)
@@ -36,6 +36,7 @@ struct GlassModule: ViewModifier {
                 )
                 .overlay(
                     shape.strokeBorder(
+                        // Liquid Glass refraction gradient: white/black simulate light physics, not color choices
                         LinearGradient(
                             colors: [
                                 .white.opacity(contrast == .increased ? 0.58 : 0.34),
