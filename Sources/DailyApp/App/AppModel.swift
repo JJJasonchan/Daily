@@ -3,6 +3,7 @@ import DailyCore
 import Foundation
 import Observation
 import UserNotifications
+import Sparkle
 
 enum MutationResult: Equatable, Sendable {
     case success
@@ -174,6 +175,7 @@ final class AppModel {
     private let notificationService: NotificationService
     private let lifecycleObserver: any AppLifecycleObserving
     private let lifetimeAnchor: AnyObject?
+    let updaterController: SPUStandardUpdaterController
     private var isObservingLifecycle = false
     private var lifecycleGeneration: UInt = 0
     private var refreshSequence: UInt = 0
@@ -191,7 +193,8 @@ final class AppModel {
         dayProvider: any DayProviding,
         notificationService: NotificationService,
         lifecycleObserver: any AppLifecycleObserving = SystemAppLifecycleObserver(),
-        lifetimeAnchor: AnyObject? = nil
+        lifetimeAnchor: AnyObject? = nil,
+        updaterController: SPUStandardUpdaterController
     ) {
         self.taskService = taskService
         self.rolloverService = rolloverService
@@ -201,6 +204,7 @@ final class AppModel {
         self.notificationService = notificationService
         self.lifecycleObserver = lifecycleObserver
         self.lifetimeAnchor = lifetimeAnchor
+        self.updaterController = updaterController
         selectedHistoryDay = LocalDay(date: dayProvider.now, calendar: dayProvider.calendar)
     }
 
@@ -830,6 +834,10 @@ final class AppModel {
             errorMessage = "重复规则已保存，但列表刷新失败。请重试。"
             return false
         }
+    }
+
+    func checkForUpdates() {
+        updaterController.checkForUpdates(nil)
     }
 
     private struct RefreshRequest {

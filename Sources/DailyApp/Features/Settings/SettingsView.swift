@@ -1,4 +1,5 @@
 import DailyCore
+import Sparkle
 import SwiftUI
 import UserNotifications
 
@@ -91,6 +92,20 @@ struct SettingsView: View {
                 }
             }
 
+            Section("🔄 更新") {
+                LabeledContent("当前版本", value: currentVersion)
+                Toggle("自动检查更新", isOn: Binding(
+                    get: { model.updaterController.updater.automaticallyChecksForUpdates },
+                    set: { model.updaterController.updater.automaticallyChecksForUpdates = $0 }
+                ))
+                HStack {
+                    Button("检查更新") {
+                        model.checkForUpdates()
+                    }
+                    Spacer()
+                }
+            }
+
             Section {
                 HStack {
                     Spacer()
@@ -111,6 +126,10 @@ struct SettingsView: View {
             presentation.hydrate(from: model)
             await model.refreshNotificationAuthorizationStatus()
         }
+    }
+
+    private var currentVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知"
     }
 
     private var authorizationDescription: String {

@@ -1,5 +1,6 @@
 import Foundation
 import UserNotifications
+import Sparkle
 import XCTest
 @testable import DailyApp
 @testable import DailyCore
@@ -105,7 +106,8 @@ final class HistoryPresentationTests: XCTestCase {
                 center: HistoryNotificationCenterClient(),
                 calendar: calendar
             ),
-            lifecycleObserver: HistoryLifecycleObserver()
+            lifecycleObserver: HistoryLifecycleObserver(),
+            updaterController: SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
         )
     }
 }

@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import UserNotifications
+import Sparkle
 import XCTest
 @testable import DailyApp
 @testable import DailyCore
@@ -1023,7 +1024,8 @@ final class AppModelTests: XCTestCase {
             repository: repository,
             dayProvider: provider,
             notificationService: notificationService,
-            lifecycleObserver: lifecycle
+            lifecycleObserver: lifecycle,
+            updaterController: SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
         )
         return AppModelFixture(
             model: model,

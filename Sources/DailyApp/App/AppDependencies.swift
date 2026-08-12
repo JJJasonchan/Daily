@@ -1,5 +1,6 @@
 import DailyCore
 import Foundation
+import Sparkle
 import SwiftData
 
 struct SystemDayProvider: DayProviding {
@@ -52,6 +53,7 @@ final class AppDependencies {
     let rolloverService: DayRolloverService
     let reminderSettingsService: ReminderSettingsService
     let appModel: AppModel
+    let updaterController: SPUStandardUpdaterController
 
     private init(
         modelContainer: ModelContainer,
@@ -60,7 +62,8 @@ final class AppDependencies {
         taskService: TaskService,
         rolloverService: DayRolloverService,
         reminderSettingsService: ReminderSettingsService,
-        appModel: AppModel
+        appModel: AppModel,
+        updaterController: SPUStandardUpdaterController
     ) {
         self.modelContainer = modelContainer
         self.repository = repository
@@ -69,6 +72,7 @@ final class AppDependencies {
         self.rolloverService = rolloverService
         self.reminderSettingsService = reminderSettingsService
         self.appModel = appModel
+        self.updaterController = updaterController
     }
 
     static func live() -> AppDependencies {
@@ -101,6 +105,7 @@ final class AppDependencies {
                 repository: repository,
                 notifications: notificationService
             )
+            let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
             let appModel = AppModel(
                 taskService: taskService,
                 rolloverService: rolloverService,
@@ -108,7 +113,8 @@ final class AppDependencies {
                 repository: repository,
                 dayProvider: dayProvider,
                 notificationService: notificationService,
-                lifetimeAnchor: modelContainer
+                lifetimeAnchor: modelContainer,
+                updaterController: updaterController
             )
             return AppDependencies(
                 modelContainer: modelContainer,
@@ -117,7 +123,8 @@ final class AppDependencies {
                 taskService: taskService,
                 rolloverService: rolloverService,
                 reminderSettingsService: reminderSettingsService,
-                appModel: appModel
+                appModel: appModel,
+                updaterController: updaterController
             )
         } catch {
             fatalError("无法创建 Daily 数据容器：\(error.localizedDescription)")

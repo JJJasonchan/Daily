@@ -2,3 +2,7 @@
 .worktrees/
 /.build/
 /build/
+scripts/generate_appcast
+scripts/generate_keys
+scripts/sign_update
+scripts/BinaryDelta

@@ -1,10 +1,13 @@
 import Carbon.HIToolbox
+import Sparkle
 import SwiftUI
 
 @MainActor
 private var sharedQuickCapture: QuickCaptureWindow?
 @MainActor
 private var sharedModel: AppModel?
+@MainActor
+private var sharedUpdaterController: SPUStandardUpdaterController?
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var globalMonitor: Any?
@@ -69,10 +72,12 @@ struct DailyApp: App {
     @State private var sceneState: AppSceneState
 
     init() {
-        let model = AppDependencies.live().appModel
+        let deps = AppDependencies.live()
+        let model = deps.appModel
         _sceneState = State(initialValue: AppSceneState(model: model))
         sharedQuickCapture = QuickCaptureWindow(model: model)
         sharedModel = model
+        sharedUpdaterController = deps.updaterController
     }
 
     var body: some Scene {
@@ -123,6 +128,12 @@ private struct DailyCommands: Commands {
                 router.focusQuickAdd()
             }
             .keyboardShortcut("a", modifiers: [.command, .shift])
+        }
+
+        CommandGroup(after: .appInfo) {
+            Button("检查更新...") {
+                sharedUpdaterController?.checkForUpdates(nil)
+            }
         }
 
         CommandGroup(after: .appSettings) {

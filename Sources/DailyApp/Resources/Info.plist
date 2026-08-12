@@ -22,5 +22,13 @@
 	<string>26.0</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://github.com/JJJasonchan/Daily/releases/latest/download/appcast.xml</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+	<key>SUPublicEDKey</key>
+	<string>CIuWrbX6j7SFLqDiyJMxeZQmksisTJ6PgsnecHBl4kI=</string>
 </dict>
 </plist>
