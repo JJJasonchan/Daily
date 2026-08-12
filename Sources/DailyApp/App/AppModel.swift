@@ -3,6 +3,22 @@ import DailyCore
 import Foundation
 import Observation
 
+enum MutationResult: Equatable, Sendable {
+    case success
+    case partialSuccess
+    case failure
+
+    var shouldDismissEditor: Bool {
+        self != .failure
+    }
+}
+
+struct CompletionUndoToken: Equatable, Sendable {
+    let id: UUID
+    let taskID: UUID
+    let wasCompleted: Bool
+}
+
 @MainActor
 protocol AppLifecycleObserving: AnyObject {
     func start(
@@ -94,7 +110,7 @@ final class AppModel {
     private(set) var templates: [TaskTemplate] = []
     private(set) var selectedHistoryDay: LocalDay
     private(set) var errorMessage: String?
-    private(set) var lastCompletionUndo: (taskID: UUID, wasCompleted: Bool)?
+    private(set) var lastCompletionUndo: CompletionUndoToken?
     var destination: Destination = .today
     var editorTaskID: UUID?
     var isPresentingNewTask = false
@@ -157,7 +173,8 @@ final class AppModel {
         errorMessage = nil
     }
 
-    func add(_ draft: TaskDraft) async {
+    @discardableResult
+    func add(_ draft: TaskDraft) async -> MutationResult {
         do {
             _ = try await taskService.create(draft, on: today, now: dayProvider.now)
         } catch {
@@ -165,15 +182,16 @@ final class AppModel {
                 reloadAfterSavedMutation(
                     successMessage: "任务已保存，但提醒失败。请重试。"
                 )
-                return
+                return .partialSuccess
             }
             errorMessage = addErrorMessage(for: error)
-            return
+            return .failure
         }
-        reloadAfterSavedMutation()
+        return reloadAfterSavedMutation() ? .success : .partialSuccess
     }
 
-    func update(_ task: DailyTask, with draft: TaskDraft) async {
+    @discardableResult
+    func update(_ task: DailyTask, with draft: TaskDraft) async -> MutationResult {
         do {
             try await taskService.update(
                 templateID: task.templateID,
@@ -186,16 +204,22 @@ final class AppModel {
                 reloadAfterSavedMutation(
                     successMessage: "任务已更新，但提醒失败。请重试。"
                 )
-                return
+                return .partialSuccess
             }
             errorMessage = addErrorMessage(for: error)
-            return
+            return .failure
         }
-        reloadAfterSavedMutation()
+        return reloadAfterSavedMutation() ? .success : .partialSuccess
     }
 
-    func toggle(_ task: DailyTask) async {
+    @discardableResult
+    func toggle(_ task: DailyTask) async -> CompletionUndoToken? {
         let wasCompleted = task.completedAt != nil
+        let undoToken = CompletionUndoToken(
+            id: UUID(),
+            taskID: task.id,
+            wasCompleted: wasCompleted
+        )
         do {
             try await taskService.setCompleted(
                 id: task.id,
@@ -204,34 +228,37 @@ final class AppModel {
             )
         } catch {
             if (error as? TaskServiceError) == .notificationSyncFailed {
-                lastCompletionUndo = (task.id, wasCompleted)
+                lastCompletionUndo = undoToken
                 reloadAfterSavedMutation(
                     successMessage: "任务状态已更新，但提醒失败。请重试。"
                 )
-                return
+                return undoToken
             }
             errorMessage = commandErrorMessage(
                 for: error,
                 notificationMessage: "任务状态已更新，但提醒失败。请重试。",
                 fallback: "更新任务状态失败。请重试。"
             )
-            return
+            return nil
         }
-        lastCompletionUndo = (task.id, wasCompleted)
+        lastCompletionUndo = undoToken
         reloadAfterSavedMutation()
+        return undoToken
     }
 
-    func undoLastCompletion() async {
-        guard let undo = lastCompletionUndo else { return }
+    func undo(_ token: CompletionUndoToken) async {
+        guard lastCompletionUndo == token else { return }
         do {
             try await taskService.setCompleted(
-                id: undo.taskID,
-                completed: undo.wasCompleted,
+                id: token.taskID,
+                completed: token.wasCompleted,
                 at: dayProvider.now
             )
         } catch {
             if (error as? TaskServiceError) == .notificationSyncFailed {
-                lastCompletionUndo = nil
+                if lastCompletionUndo == token {
+                    lastCompletionUndo = nil
+                }
                 reloadAfterSavedMutation(
                     successMessage: "任务状态已恢复，但提醒失败。请重试。"
                 )
@@ -244,7 +271,9 @@ final class AppModel {
             )
             return
         }
-        lastCompletionUndo = nil
+        if lastCompletionUndo == token {
+            lastCompletionUndo = nil
+        }
         reloadAfterSavedMutation()
     }
 
@@ -371,12 +400,15 @@ final class AppModel {
         return fallback
     }
 
-    private func reloadAfterSavedMutation(successMessage: String? = nil) {
+    @discardableResult
+    private func reloadAfterSavedMutation(successMessage: String? = nil) -> Bool {
         do {
             try reload()
             errorMessage = successMessage
+            return true
         } catch {
             errorMessage = "任务已保存，但列表刷新失败。请重试。"
+            return false
         }
     }
 

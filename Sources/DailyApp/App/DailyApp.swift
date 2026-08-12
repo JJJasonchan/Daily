@@ -10,7 +10,7 @@ struct DailyApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        Window("Daily", id: "main") {
             AppShellView(model: model)
                 .task {
                     await model.start()

@@ -19,6 +19,11 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(MotionTokens.reduced.hoverLift, 0)
     }
 
+    func testCompletedRowsCannotEditUntilCompletionIsCancelled() {
+        XCTAssertFalse(TaskRowState.canEdit(isCompleted: true))
+        XCTAssertTrue(TaskRowState.canEdit(isCompleted: false))
+    }
+
     func testReorderProjectionClampsDestinationAndMovesNeighborsContinuously() {
         XCTAssertEqual(
             ReorderLayout.destinationIndex(
@@ -87,10 +92,30 @@ final class AppModelTests: XCTestCase {
     func testAddReloadsTodayState() async {
         let fixture = makeFixture()
 
-        await fixture.model.add(TaskDraft(title: "Write report"))
+        let result = await fixture.model.add(TaskDraft(title: "Write report"))
 
+        XCTAssertEqual(result, .success)
         XCTAssertEqual(fixture.model.todayTasks.map(\.titleSnapshot), ["Write report"])
         XCTAssertNil(fixture.model.errorMessage)
+    }
+
+    func testAddReminderPartialSuccessIsDismissableAndWritesOnlyOnce() async {
+        let fixture = makeFixture()
+        fixture.notifications.shouldFailSync = true
+
+        let result = await fixture.model.add(
+            TaskDraft(
+                title: "Water plants",
+                reminderMode: .once,
+                reminderHour: 9,
+                reminderMinute: 0
+            )
+        )
+
+        XCTAssertEqual(result, .partialSuccess)
+        XCTAssertTrue(result.shouldDismissEditor)
+        XCTAssertEqual(fixture.repository.saveCallCount, 1)
+        XCTAssertEqual(fixture.repository.storedTasks.map(\.titleSnapshot), ["Water plants"])
     }
 
     func testUpdateRoutesTaskEditorChangesThroughModelAndReloadsToday() async throws {
@@ -107,6 +132,33 @@ final class AppModelTests: XCTestCase {
 
         XCTAssertEqual(fixture.model.todayTasks.map(\.titleSnapshot), ["New title"])
         XCTAssertNil(fixture.model.errorMessage)
+    }
+
+    func testUpdateReminderPartialSuccessIsDismissableAndWritesOnlyOnce() async throws {
+        let template = TaskTemplate(title: "Old title")
+        let task = DailyTask(
+            templateID: template.id,
+            dayKey: day.rawValue,
+            titleSnapshot: template.title
+        )
+        let fixture = makeFixture(templates: [template], tasks: [task])
+        try fixture.model.reload()
+        fixture.notifications.shouldFailSync = true
+
+        let result = await fixture.model.update(
+            task,
+            with: TaskDraft(
+                title: "New title",
+                reminderMode: .once,
+                reminderHour: 10,
+                reminderMinute: 30
+            )
+        )
+
+        XCTAssertEqual(result, .partialSuccess)
+        XCTAssertTrue(result.shouldDismissEditor)
+        XCTAssertEqual(fixture.repository.saveCallCount, 1)
+        XCTAssertEqual(fixture.repository.storedTasks.map(\.titleSnapshot), ["New title"])
     }
 
     func testToggleReloadsTaskAndCompletedCount() async throws {
@@ -139,13 +191,69 @@ final class AppModelTests: XCTestCase {
         let fixture = makeFixture(templates: [template], tasks: [task])
         try fixture.model.reload()
 
-        await fixture.model.toggle(task)
+        let token = await fixture.model.toggle(task)
         XCTAssertNil(fixture.model.todayTasks.first?.completedAt)
 
-        await fixture.model.undoLastCompletion()
+        await fixture.model.undo(token!)
 
         XCTAssertNotNil(fixture.model.todayTasks.first?.completedAt)
         XCTAssertEqual(fixture.model.completedCount, 1)
+        XCTAssertNil(fixture.model.lastCompletionUndo)
+    }
+
+    func testStaleUndoTokenDoesNotClearOrUndoNewCompletion() async throws {
+        let firstTemplate = TaskTemplate(title: "First")
+        let secondTemplate = TaskTemplate(title: "Second")
+        let firstTask = DailyTask(
+            templateID: firstTemplate.id,
+            dayKey: day.rawValue,
+            titleSnapshot: firstTemplate.title
+        )
+        let secondTask = DailyTask(
+            templateID: secondTemplate.id,
+            dayKey: day.rawValue,
+            titleSnapshot: secondTemplate.title
+        )
+        let fixture = makeFixture(
+            templates: [firstTemplate, secondTemplate],
+            tasks: [firstTask, secondTask]
+        )
+        try fixture.model.reload()
+
+        let staleToken = await fixture.model.toggle(firstTask)
+        let currentToken = await fixture.model.toggle(secondTask)
+        await fixture.model.undo(staleToken!)
+
+        XCTAssertNotNil(fixture.model.todayTasks.first { $0.id == firstTask.id }?.completedAt)
+        XCTAssertNotNil(fixture.model.todayTasks.first { $0.id == secondTask.id }?.completedAt)
+        XCTAssertEqual(fixture.model.lastCompletionUndo, currentToken)
+    }
+
+    func testCurrentUndoTokenRestoresOnlyItsTask() async throws {
+        let firstTemplate = TaskTemplate(title: "First")
+        let secondTemplate = TaskTemplate(title: "Second")
+        let firstTask = DailyTask(
+            templateID: firstTemplate.id,
+            dayKey: day.rawValue,
+            titleSnapshot: firstTemplate.title
+        )
+        let secondTask = DailyTask(
+            templateID: secondTemplate.id,
+            dayKey: day.rawValue,
+            titleSnapshot: secondTemplate.title
+        )
+        let fixture = makeFixture(
+            templates: [firstTemplate, secondTemplate],
+            tasks: [firstTask, secondTask]
+        )
+        try fixture.model.reload()
+
+        _ = await fixture.model.toggle(firstTask)
+        let currentToken = await fixture.model.toggle(secondTask)
+        await fixture.model.undo(currentToken!)
+
+        XCTAssertNotNil(fixture.model.todayTasks.first { $0.id == firstTask.id }?.completedAt)
+        XCTAssertNil(fixture.model.todayTasks.first { $0.id == secondTask.id }?.completedAt)
         XCTAssertNil(fixture.model.lastCompletionUndo)
     }
 
@@ -159,8 +267,10 @@ final class AppModelTests: XCTestCase {
         try fixture.model.reload()
         let existingIDs = fixture.model.todayTasks.map(\.id)
 
-        await fixture.model.add(TaskDraft(title: "   "))
+        let result = await fixture.model.add(TaskDraft(title: "   "))
 
+        XCTAssertEqual(result, .failure)
+        XCTAssertFalse(result.shouldDismissEditor)
         XCTAssertEqual(fixture.model.todayTasks.map(\.id), existingIDs)
         XCTAssertEqual(fixture.model.errorMessage, "任务标题不能为空。")
     }

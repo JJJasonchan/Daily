@@ -6,8 +6,7 @@ struct TodayView: View {
     @Bindable var model: AppModel
 
     @State private var pendingCompletion: [UUID: Bool] = [:]
-    @State private var showsUndo = false
-    @State private var completionTask: Task<Void, Never>?
+    @State private var undoToken: CompletionUndoToken?
     @State private var undoDismissalTask: Task<Void, Never>?
 
     private var motion: MotionSpec {
@@ -41,8 +40,8 @@ struct TodayView: View {
                 .frame(maxWidth: .infinity)
             }
 
-            if showsUndo {
-                undoOverlay
+            if let undoToken {
+                undoOverlay(for: undoToken)
                     .padding(24)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -118,11 +117,13 @@ struct TodayView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var undoOverlay: some View {
+    private func undoOverlay(for token: CompletionUndoToken) -> some View {
         HStack(spacing: 12) {
             Text("任务状态已更新")
                 .font(.subheadline.weight(.medium))
-            Button("撤销", action: undo)
+            Button("撤销") {
+                undo(token)
+            }
                 .buttonStyle(.borderless)
                 .keyboardShortcut("z", modifiers: .command)
         }
@@ -156,16 +157,18 @@ struct TodayView: View {
 
         withAnimation(animation) {
             pendingCompletion[task.id] = targetCompletion
-            showsUndo = true
         }
-        scheduleUndoDismissal()
 
-        let precedingCompletionTask = completionTask
-        completionTask = Task { @MainActor in
-            await precedingCompletionTask?.value
-            await model.toggle(task)
+        Task { @MainActor in
+            let token = await model.toggle(task)
             withAnimation(animation) {
                 pendingCompletion[task.id] = nil
+                if let token {
+                    undoToken = token
+                }
+            }
+            if let token {
+                scheduleUndoDismissal(for: token)
             }
         }
     }
@@ -174,27 +177,24 @@ struct TodayView: View {
         model.editorTaskID = task.id
     }
 
-    private func scheduleUndoDismissal() {
+    private func scheduleUndoDismissal(for token: CompletionUndoToken) {
         undoDismissalTask?.cancel()
         undoDismissalTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(5))
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, undoToken == token else { return }
             withAnimation(motion.animation) {
-                showsUndo = false
+                undoToken = nil
             }
         }
     }
 
-    private func undo() {
-        undoDismissalTask?.cancel()
-        let pendingCompletionTask = completionTask
+    private func undo(_ token: CompletionUndoToken) {
+        guard undoToken == token else { return }
         withAnimation(motion.animation) {
-            showsUndo = false
-            pendingCompletion.removeAll()
+            undoToken = nil
         }
         Task { @MainActor in
-            await pendingCompletionTask?.value
-            await model.undoLastCompletion()
+            await model.undo(token)
         }
     }
 }

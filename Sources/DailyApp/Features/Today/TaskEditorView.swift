@@ -163,13 +163,14 @@ struct TaskEditorView: View {
         let draft = makeDraft()
 
         Task { @MainActor in
+            let result: MutationResult
             if let task {
-                await model.update(task, with: draft)
+                result = await model.update(task, with: draft)
             } else {
-                await model.add(draft)
+                result = await model.add(draft)
             }
             isSaving = false
-            if model.errorMessage == nil {
+            if result.shouldDismissEditor {
                 dismiss()
             }
         }

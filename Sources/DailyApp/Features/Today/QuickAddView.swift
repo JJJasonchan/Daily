@@ -50,9 +50,9 @@ struct QuickAddView: View {
         isSaving = true
         model.clearError()
         Task { @MainActor in
-            await model.add(TaskDraft(title: submittedTitle))
+            let result = await model.add(TaskDraft(title: submittedTitle))
             isSaving = false
-            if model.errorMessage == nil {
+            if result.shouldDismissEditor {
                 title = ""
                 isFocused = true
             }

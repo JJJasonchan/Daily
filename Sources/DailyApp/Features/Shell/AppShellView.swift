@@ -52,12 +52,14 @@ struct AppShellView: View {
 
     private var editingTask: DailyTask? {
         guard let editorTaskID = model.editorTaskID else { return nil }
-        return model.todayTasks.first { $0.id == editorTaskID }
+        return model.todayTasks.first {
+            $0.id == editorTaskID && $0.completedAt == nil
+        }
     }
 
     private var editorPresentation: Binding<Bool> {
         Binding(
-            get: { model.isPresentingNewTask || model.editorTaskID != nil },
+            get: { model.isPresentingNewTask || editingTask != nil },
             set: { isPresented in
                 guard !isPresented else { return }
                 model.isPresentingNewTask = false

@@ -1,6 +1,12 @@
 import DailyCore
 import SwiftUI
 
+enum TaskRowState {
+    static func canEdit(isCompleted: Bool) -> Bool {
+        !isCompleted
+    }
+}
+
 struct TaskRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
@@ -18,6 +24,10 @@ struct TaskRow: View {
 
     private var motion: MotionSpec {
         MotionTokens.resolved(MotionTokens.standard, reduceMotion: reduceMotion)
+    }
+
+    private var canEdit: Bool {
+        TaskRowState.canEdit(isCompleted: isCompleted)
     }
 
     var body: some View {
@@ -67,6 +77,7 @@ struct TaskRow: View {
         .padding(.horizontal, 14)
         .frame(height: ReorderableTaskList.rowHeight)
         .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+        .opacity(isCompleted ? 0.78 : 1)
         .glassModule(
             interactive: true,
             tint: isCompleted ? Color.secondary.opacity(0.08) : nil,
@@ -80,7 +91,6 @@ struct TaskRow: View {
                 )
                 .padding(1)
         }
-        .opacity(isCompleted ? 0.78 : 1)
         .scaleEffect(isPressing ? motion.pressScale : 1)
         .offset(y: isHovered && !isDragSource ? motion.hoverLift : 0)
         .shadow(
@@ -97,7 +107,10 @@ struct TaskRow: View {
             onToggle()
             return .handled
         }
-        .onTapGesture(count: 2, perform: onEdit)
+        .onTapGesture(count: 2) {
+            guard canEdit else { return }
+            onEdit()
+        }
         .onHover { isHovered = $0 }
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
@@ -107,6 +120,7 @@ struct TaskRow: View {
         )
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilitySummary)
+        .accessibilityHint(canEdit ? "双击编辑" : "取消完成后可编辑")
     }
 
     private var reorderGesture: some Gesture {
