@@ -15,8 +15,37 @@ enum MutationResult: Equatable, Sendable {
 
 struct CompletionUndoToken: Equatable, Sendable {
     let id: UUID
+    let sourceCommandID: UUID
     let taskID: UUID
     let wasCompleted: Bool
+}
+
+struct CompletionCommand: Sendable {
+    let id: UUID
+    let taskID: UUID
+    let targetCompletion: Bool
+    private let result: Task<CompletionUndoToken?, Never>
+
+    init(
+        id: UUID,
+        taskID: UUID,
+        targetCompletion: Bool,
+        result: Task<CompletionUndoToken?, Never>
+    ) {
+        self.id = id
+        self.taskID = taskID
+        self.targetCompletion = targetCompletion
+        self.result = result
+    }
+
+    var value: CompletionUndoToken? {
+        get async { await result.value }
+    }
+}
+
+private struct QueuedCompletionCommand {
+    let id: UUID
+    let targetCompletion: Bool
 }
 
 @MainActor
@@ -129,7 +158,7 @@ final class AppModel {
     private var pendingRefresh: RefreshRequest?
     private var lifecycleRefreshTask: Task<Void, Never>?
     private var completionCommandTail: Task<Void, Never>?
-    private var queuedCompletionTargets: [UUID: Bool] = [:]
+    private var queuedCompletionCommands: [UUID: QueuedCompletionCommand] = [:]
 
     init(
         taskService: TaskService,
@@ -216,7 +245,8 @@ final class AppModel {
 
     @discardableResult
     func toggle(_ task: DailyTask) async -> CompletionUndoToken? {
-        let currentCompletion = queuedCompletionTargets[task.id] ?? (task.completedAt != nil)
+        let currentCompletion = queuedCompletionCommands[task.id]?.targetCompletion
+            ?? (task.completedAt != nil)
         return await enqueueCompletion(
             task,
             completed: !currentCompletion
@@ -226,35 +256,47 @@ final class AppModel {
     func enqueueCompletion(
         _ task: DailyTask,
         completed: Bool
-    ) -> Task<CompletionUndoToken?, Never> {
+    ) -> CompletionCommand {
         let predecessor = completionCommandTail
-        queuedCompletionTargets[task.id] = completed
+        let commandID = UUID()
+        queuedCompletionCommands[task.id] = QueuedCompletionCommand(
+            id: commandID,
+            targetCompletion: completed
+        )
         let command = Task<CompletionUndoToken?, Never> { @MainActor [weak self] in
             await predecessor?.value
             guard let self else { return nil }
             let token = await performSetCompletion(
+                commandID: commandID,
                 taskID: task.id,
                 completed: completed,
                 wasCompleted: !completed
             )
-            if queuedCompletionTargets[task.id] == completed {
-                queuedCompletionTargets[task.id] = nil
+            if queuedCompletionCommands[task.id]?.id == commandID {
+                queuedCompletionCommands[task.id] = nil
             }
             return token
         }
         completionCommandTail = Task { @MainActor in
             _ = await command.value
         }
-        return command
+        return CompletionCommand(
+            id: commandID,
+            taskID: task.id,
+            targetCompletion: completed,
+            result: command
+        )
     }
 
     private func performSetCompletion(
+        commandID: UUID,
         taskID: UUID,
         completed: Bool,
         wasCompleted: Bool
     ) async -> CompletionUndoToken? {
         let undoToken = CompletionUndoToken(
             id: UUID(),
+            sourceCommandID: commandID,
             taskID: taskID,
             wasCompleted: wasCompleted
         )

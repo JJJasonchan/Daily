@@ -1,12 +1,55 @@
 import DailyCore
 import SwiftUI
 
+struct PendingCompletionPresentation: Equatable, Sendable {
+    let commandID: UUID
+    let targetCompletion: Bool
+}
+
+struct CompletionPresentationState: Equatable, Sendable {
+    private var pendingByTaskID: [UUID: PendingCompletionPresentation] = [:]
+    private(set) var undoToken: CompletionUndoToken?
+
+    mutating func submit(_ command: CompletionCommand) {
+        pendingByTaskID[command.taskID] = PendingCompletionPresentation(
+            commandID: command.id,
+            targetCompletion: command.targetCompletion
+        )
+    }
+
+    func pending(taskID: UUID) -> PendingCompletionPresentation? {
+        pendingByTaskID[taskID]
+    }
+
+    func targetCompletion(taskID: UUID) -> Bool? {
+        pendingByTaskID[taskID]?.targetCompletion
+    }
+
+    @discardableResult
+    mutating func complete(
+        _ command: CompletionCommand,
+        token: CompletionUndoToken?
+    ) -> Bool {
+        guard pendingByTaskID[command.taskID]?.commandID == command.id else {
+            return false
+        }
+        pendingByTaskID[command.taskID] = nil
+        undoToken = token?.sourceCommandID == command.id ? token : nil
+        return true
+    }
+
+    mutating func dismissUndo(_ token: CompletionUndoToken) -> Bool {
+        guard undoToken == token else { return false }
+        undoToken = nil
+        return true
+    }
+}
+
 struct TodayView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var model: AppModel
 
-    @State private var pendingCompletion: [UUID: Bool] = [:]
-    @State private var undoToken: CompletionUndoToken?
+    @State private var completionPresentation = CompletionPresentationState()
     @State private var undoDismissalTask: Task<Void, Never>?
 
     private var motion: MotionSpec {
@@ -40,7 +83,7 @@ struct TodayView: View {
                 .frame(maxWidth: .infinity)
             }
 
-            if let undoToken {
+            if let undoToken = completionPresentation.undoToken {
                 undoOverlay(for: undoToken)
                     .padding(24)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -148,29 +191,25 @@ struct TodayView: View {
     }
 
     private func effectiveCompletion(_ task: DailyTask) -> Bool {
-        pendingCompletion[task.id] ?? (task.completedAt != nil)
+        completionPresentation.targetCompletion(taskID: task.id)
+            ?? (task.completedAt != nil)
     }
 
     private func toggle(_ task: DailyTask) {
         let targetCompletion = !effectiveCompletion(task)
         let animation = motion.animation
 
-        withAnimation(animation) {
-            pendingCompletion[task.id] = targetCompletion
-        }
-
         let command = model.enqueueCompletion(task, completed: targetCompletion)
+        withAnimation(animation) {
+            completionPresentation.submit(command)
+        }
         Task { @MainActor in
             let token = await command.value
-            var didPublishToken = false
-            withAnimation(animation) {
-                if pendingCompletion[task.id] == targetCompletion {
-                    pendingCompletion[task.id] = nil
-                    undoToken = token
-                    didPublishToken = token != nil
-                }
+            let didPublishToken: Bool = withAnimation(animation) {
+                completionPresentation.complete(command, token: token)
             }
-            if let token, didPublishToken {
+            if let token, didPublishToken,
+               completionPresentation.undoToken == token {
                 scheduleUndoDismissal(for: token)
             }
         }
@@ -184,17 +223,18 @@ struct TodayView: View {
         undoDismissalTask?.cancel()
         undoDismissalTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(5))
-            guard !Task.isCancelled, undoToken == token else { return }
+            guard !Task.isCancelled,
+                  completionPresentation.undoToken == token else { return }
             withAnimation(motion.animation) {
-                undoToken = nil
+                _ = completionPresentation.dismissUndo(token)
             }
         }
     }
 
     private func undo(_ token: CompletionUndoToken) {
-        guard undoToken == token else { return }
+        guard completionPresentation.undoToken == token else { return }
         withAnimation(motion.animation) {
-            undoToken = nil
+            _ = completionPresentation.dismissUndo(token)
         }
         _ = model.enqueueUndo(token)
     }

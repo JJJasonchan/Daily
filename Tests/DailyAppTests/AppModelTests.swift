@@ -368,6 +368,82 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(fixture.model.lastCompletionUndo, secondToken)
     }
 
+    func testABACompletionOnlyFinalCommandClearsPendingAndPublishesUndo() async throws {
+        let template = TaskTemplate(title: "Walk")
+        let task = DailyTask(
+            templateID: template.id,
+            dayKey: day.rawValue,
+            titleSnapshot: template.title,
+            reminderMode: .once,
+            reminderHour: 9,
+            reminderMinute: 0
+        )
+        let fixture = makeFixture(templates: [template], tasks: [task])
+        try fixture.model.reload()
+        fixture.notifications.blockNextCancel()
+        var presentation = CompletionPresentationState()
+
+        let first = fixture.model.enqueueCompletion(task, completed: true)
+        presentation.submit(first)
+        await fixture.notifications.waitUntilCancelIsBlocked()
+        let second = fixture.model.enqueueCompletion(task, completed: false)
+        presentation.submit(second)
+        let third = fixture.model.enqueueCompletion(task, completed: true)
+        presentation.submit(third)
+
+        fixture.notifications.resumeBlockedCancel()
+        let firstToken = await first.value
+        XCTAssertFalse(presentation.complete(first, token: firstToken))
+        XCTAssertEqual(presentation.pending(taskID: task.id)?.commandID, third.id)
+        XCTAssertNil(presentation.undoToken)
+
+        let secondToken = await second.value
+        XCTAssertFalse(presentation.complete(second, token: secondToken))
+        XCTAssertEqual(presentation.pending(taskID: task.id)?.commandID, third.id)
+        XCTAssertNil(presentation.undoToken)
+
+        let thirdToken = await third.value
+        XCTAssertTrue(presentation.complete(third, token: thirdToken))
+        XCTAssertNil(presentation.pending(taskID: task.id))
+        XCTAssertEqual(presentation.undoToken?.sourceCommandID, third.id)
+
+        await fixture.model.undo(presentation.undoToken!)
+
+        XCTAssertNil(fixture.model.todayTasks.first?.completedAt)
+        XCTAssertNil(fixture.model.lastCompletionUndo)
+    }
+
+    func testSameTargetCommandsForDifferentTasksHaveDistinctCommandIDs() async throws {
+        let firstTemplate = TaskTemplate(title: "First")
+        let secondTemplate = TaskTemplate(title: "Second")
+        let firstTask = DailyTask(
+            templateID: firstTemplate.id,
+            dayKey: day.rawValue,
+            titleSnapshot: firstTemplate.title
+        )
+        let secondTask = DailyTask(
+            templateID: secondTemplate.id,
+            dayKey: day.rawValue,
+            titleSnapshot: secondTemplate.title
+        )
+        let fixture = makeFixture(
+            templates: [firstTemplate, secondTemplate],
+            tasks: [firstTask, secondTask]
+        )
+        try fixture.model.reload()
+
+        let first = fixture.model.enqueueCompletion(firstTask, completed: true)
+        let second = fixture.model.enqueueCompletion(secondTask, completed: true)
+
+        XCTAssertNotEqual(first.id, second.id)
+        XCTAssertEqual(first.taskID, firstTask.id)
+        XCTAssertEqual(second.taskID, secondTask.id)
+        let firstToken = await first.value
+        let secondToken = await second.value
+        XCTAssertEqual(firstToken?.sourceCommandID, first.id)
+        XCTAssertEqual(secondToken?.sourceCommandID, second.id)
+    }
+
     func testFailedAddPreservesCurrentListAndShowsSpecificError() async throws {
         let existing = DailyTask(
             templateID: UUID(),
