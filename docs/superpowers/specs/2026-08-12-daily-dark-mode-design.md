@@ -2,7 +2,7 @@
 
 ## 1. 概述
 
-Daily 的暗黑模式**完全跟随系统外观设置**，不提供独立的应用内切换。所有视觉适配通过 SwiftUI 语义色与系统材质实现，零硬编码色值，零暗色专属分支代码。
+Daily 的暗黑模式**默认跟随系统外观**，同时在设置页提供「跟随系统 / 浅色 / 深色」三选一持久切换。所有视觉适配通过 SwiftUI 语义色与系统材质实现，零硬编码色值，零暗色专属分支代码。颜色模式设置持久化到 `AppSettings.colorSchemeMode`，重启后保持。
 
 ### 1.1 范围
 
@@ -15,9 +15,17 @@ Daily 的暗黑模式**完全跟随系统外观设置**，不提供独立的应�
 
 ### 1.2 非范围
 
-- 不引入 app 内独立的外观切换开关
-- 不持久化外观相关设置
+- ~~不引入 app 内独立的外观切换开关~~ → 已在设置页添加三选一 Picker
+- ~~不持久化外观相关设置~~ → 已持久化到 `AppSettings.colorSchemeMode`
 - 不定义 Asset Catalog 色板（语义色已覆盖全部需求）
+
+## 1.3 外观设置实现
+
+- `AppSettings` 新增 `colorSchemeMode` 字段（`ColorSchemeMode` 枚举：`.system` / `.light` / `.dark`，默认 `.system`）
+- 设置页 `SettingsView` 使用 `Picker(.segmented)` 展示三选项
+- `DailyApp` 在 `Window` 和 `MenuBarExtra` 上应用 `.preferredColorScheme()`
+- 菜单栏 NSPanel 的 `appearance` 根据 `colorSchemeMode` 动态设置
+- 语义色方案不受影响：任何模式下 `.primary` / `.secondary` / `.tertiary` 始终正确映射
 
 ## 2. 颜色语义映射
 
