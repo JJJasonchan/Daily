@@ -14,7 +14,7 @@
 - Runtime network access, accounts, cloud sync, analytics, and third-party dependencies are forbidden.
 - Today shows one unified task list; it never groups tasks by one-time or recurring origin.
 - Main window and menu-bar panel share one `AppModel` and update immediately.
-- Primary colors are black, white, and neutral gray; semantic system colors are reserved for warnings and errors.
+- 所有颜色使用 SwiftUI 语义 token（`.primary`、`.secondary`、`.tertiary`、`.quaternary`、`.accentColor`）；所有材质使用 `Material` 枚举（`.regular`、`.thin`、`.ultraThin`）；禁止硬编码 `Color.white`、`Color.black`、`Color.gray` 或任何 RGB/十六进制色值。暗黑模式完全跟随系统外观，不提供独立切换。Liquid Glass 折射梯度中使用的 `.white`/`.black` 为物理光学模拟的例外，已加注释说明。颜色语义映射遵循 `docs/superpowers/specs/2026-08-12-daily-dark-mode-design.md`。
 - Use native `glassEffect`, `GlassEffectContainer`, `glassEffectID`, and interactive glass; do not simulate Liquid Glass.
 - Default motion uses interruptible springs; honor Reduce Motion, Reduce Transparency, Increase Contrast, VoiceOver, and keyboard navigation.
 - Use test-driven development, run the focused test before and after each implementation, and commit after every task.
