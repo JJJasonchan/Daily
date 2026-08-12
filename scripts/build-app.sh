@@ -50,6 +50,7 @@ remove_controlled_directory "$staging_dir" ".Daily.app.staging"
 mkdir -p -- "$staging_dir/Contents/MacOS" "$staging_dir/Contents/Resources"
 install -m 755 -- "$binary_dir/Daily" "$staging_dir/Contents/MacOS/Daily"
 install -m 644 -- "$plist_path" "$staging_dir/Contents/Info.plist"
+install -m 644 -- "$project_dir/Sources/DailyApp/Resources/AppIcon.icns" "$staging_dir/Contents/Resources/AppIcon.icns"
 
 codesign --force --deep --sign - "$staging_dir"
 codesign --verify --deep --strict "$staging_dir"
