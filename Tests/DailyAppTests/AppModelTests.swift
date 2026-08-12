@@ -144,6 +144,107 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(fixture.model.todayTasks.first?.titleSnapshot, "New")
     }
 
+    func testTaskEditorRecurrenceStartUsesTemplateStartOrModelClock() {
+        let fixture = makeFixture()
+        let originalStart = LocalDay(rawValue: "2026-07-01")
+        let template = TaskTemplate(
+            title: "Read",
+            kind: .recurring,
+            recurrence: RecurrenceRule(
+                frequency: .daily,
+                weekdays: [],
+                startDay: originalStart
+            )
+        )
+
+        XCTAssertEqual(
+            TaskEditorRecurrenceStartDay.resolve(
+                template: template,
+                currentDay: fixture.model.currentDay
+            ),
+            originalStart
+        )
+        XCTAssertEqual(
+            TaskEditorRecurrenceStartDay.resolve(
+                template: nil,
+                currentDay: fixture.model.currentDay
+            ),
+            day
+        )
+    }
+
+    func testDeletedTemplateLeavesTodayInstanceEditableWithoutRestoringTemplateOrChangingHistory() async throws {
+        let template = recurringTemplate(title: "Read", sortIndex: 0)
+        let historicalTask = DailyTask(
+            templateID: template.id,
+            dayKey: "2026-08-11",
+            titleSnapshot: "Historical Read"
+        )
+        let todayTask = DailyTask(
+            templateID: template.id,
+            dayKey: day.rawValue,
+            titleSnapshot: template.title
+        )
+        let fixture = makeFixture(
+            templates: [template],
+            tasks: [historicalTask, todayTask]
+        )
+        try fixture.model.reload()
+        XCTAssertEqual(fixture.model.deleteTemplate(template), .success)
+
+        let result = await fixture.model.update(
+            todayTask,
+            with: TaskDraft(
+                title: "Edited today",
+                kind: .once,
+                reminderMode: .once,
+                reminderHour: 11,
+                reminderMinute: 5
+            )
+        )
+
+        XCTAssertEqual(result, .success)
+        XCTAssertTrue(fixture.repository.storedTemplates.isEmpty)
+        XCTAssertEqual(fixture.model.todayTasks.first?.titleSnapshot, "Edited today")
+        XCTAssertEqual(historicalTask.titleSnapshot, "Historical Read")
+
+        _ = await fixture.model.toggle(todayTask)
+        XCTAssertNotNil(fixture.model.todayTasks.first?.completedAt)
+    }
+
+    func testSettingsPresentationEditsSurviveDelayedPermissionRefresh() async {
+        let settings = AppSettings(
+            dailyReminderEnabled: true,
+            dailyReminderHour: 8,
+            dailyReminderMinute: 30,
+            persistentIntervalMinutes: 10,
+            lastProcessedDayKey: day.rawValue
+        )
+        let authorization = AppModelNotificationCenterClient(status: .notDetermined)
+        authorization.blockNextStatusRead()
+        let fixture = makeFixture(
+            settings: settings,
+            authorizationClient: authorization
+        )
+        var presentation = SettingsPresentationState()
+
+        fixture.model.loadReminderSettings()
+        presentation.hydrate(from: fixture.model)
+        presentation.dailyReminderEnabled = false
+        presentation.persistentIntervalMinutes = 60
+
+        let refresh = Task {
+            await fixture.model.refreshNotificationAuthorizationStatus()
+        }
+        await authorization.waitUntilStatusReadIsBlocked()
+        authorization.resumeBlockedStatusRead(with: .authorized)
+        await refresh.value
+
+        XCTAssertFalse(presentation.dailyReminderEnabled)
+        XCTAssertEqual(presentation.persistentIntervalMinutes, 60)
+        XCTAssertEqual(fixture.model.notificationAuthorizationStatus, .authorized)
+    }
+
     func testLoadingSettingsReadsPersistedValuesAndActualDeniedPermission() async {
         let settings = AppSettings(
             dailyReminderEnabled: true,
@@ -158,7 +259,8 @@ final class AppModelTests: XCTestCase {
             authorizationClient: authorization
         )
 
-        await fixture.model.loadReminderSettings()
+        fixture.model.loadReminderSettings()
+        await fixture.model.refreshNotificationAuthorizationStatus()
 
         XCTAssertTrue(fixture.model.dailyReminderEnabled)
         XCTAssertEqual(fixture.model.dailyReminderHour, 8)
@@ -175,7 +277,8 @@ final class AppModelTests: XCTestCase {
         )
         let fixture = makeFixture(authorizationClient: authorization)
 
-        await fixture.model.loadReminderSettings()
+        fixture.model.loadReminderSettings()
+        await fixture.model.refreshNotificationAuthorizationStatus()
         XCTAssertEqual(authorization.requestCallCount, 0)
 
         await fixture.model.requestNotificationAuthorization()
@@ -1051,6 +1154,10 @@ private final class AppModelNotificationCenterClient: NotificationCenterClient {
     private(set) var status: UNAuthorizationStatus
     private let grantsAuthorization: Bool
     private(set) var requestCallCount = 0
+    private var shouldBlockNextStatusRead = false
+    private var statusReadContinuation: CheckedContinuation<UNAuthorizationStatus, Never>?
+    private var statusReadWaiter: CheckedContinuation<Void, Never>?
+    private var hasBlockedStatusRead = false
 
     init(
         status: UNAuthorizationStatus = .notDetermined,
@@ -1060,7 +1167,18 @@ private final class AppModelNotificationCenterClient: NotificationCenterClient {
         self.grantsAuthorization = grantsAuthorization
     }
 
-    func authorizationStatus() async -> UNAuthorizationStatus { status }
+    func authorizationStatus() async -> UNAuthorizationStatus {
+        if shouldBlockNextStatusRead {
+            shouldBlockNextStatusRead = false
+            hasBlockedStatusRead = true
+            statusReadWaiter?.resume()
+            statusReadWaiter = nil
+            return await withCheckedContinuation { continuation in
+                statusReadContinuation = continuation
+            }
+        }
+        return status
+    }
 
     func requestAuthorization() async throws -> Bool {
         requestCallCount += 1
@@ -1070,6 +1188,23 @@ private final class AppModelNotificationCenterClient: NotificationCenterClient {
     func add(_ request: UNNotificationRequest) async throws {}
     func removePending(ids: [String]) {}
     func pendingRequests() async -> [UNNotificationRequest] { [] }
+
+    func blockNextStatusRead() {
+        shouldBlockNextStatusRead = true
+    }
+
+    func waitUntilStatusReadIsBlocked() async {
+        if hasBlockedStatusRead { return }
+        await withCheckedContinuation { continuation in
+            statusReadWaiter = continuation
+        }
+    }
+
+    func resumeBlockedStatusRead(with status: UNAuthorizationStatus) {
+        self.status = status
+        statusReadContinuation?.resume(returning: status)
+        statusReadContinuation = nil
+    }
 }
 
 @MainActor

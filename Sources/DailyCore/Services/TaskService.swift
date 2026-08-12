@@ -65,9 +65,20 @@ public final class TaskService {
             throw TaskServiceError.templateNotFound
         }
 
+        let recurrence: RecurrenceRule?
+        if template.kind == .recurring,
+           draft.kind == .recurring,
+           var updatedRecurrence = draft.recurrence,
+           let originalStartDay = template.recurrence?.startDay {
+            updatedRecurrence.startDay = originalStartDay
+            recurrence = updatedRecurrence
+        } else {
+            recurrence = draft.recurrence
+        }
+
         template.title = title
         template.kind = draft.kind
-        template.recurrence = draft.recurrence
+        template.recurrence = recurrence
         template.reminderMode = draft.reminderMode
         template.reminderHour = draft.reminderHour
         template.reminderMinute = draft.reminderMinute
@@ -87,6 +98,20 @@ public final class TaskService {
         for task in updatedTasks {
             try await syncNotification(for: task, now: now)
         }
+    }
+
+    public func updateInstance(id: UUID, draft: TaskDraft, now: Date) async throws {
+        let title = try validatedTitle(for: draft)
+        guard let task = try repository.dailyTask(id: id) else {
+            throw TaskServiceError.taskNotFound
+        }
+
+        task.titleSnapshot = title
+        task.reminderMode = draft.reminderMode
+        task.reminderHour = draft.reminderHour
+        task.reminderMinute = draft.reminderMinute
+        try repository.save()
+        try await syncNotification(for: task, now: now)
     }
 
     public func setCompleted(id: UUID, completed: Bool, at date: Date) async throws {

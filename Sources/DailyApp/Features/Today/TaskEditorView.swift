@@ -1,6 +1,15 @@
 import DailyCore
 import SwiftUI
 
+enum TaskEditorRecurrenceStartDay {
+    static func resolve(
+        template: TaskTemplate?,
+        currentDay: LocalDay
+    ) -> LocalDay {
+        template?.recurrence?.startDay ?? currentDay
+    }
+}
+
 struct TaskEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var model: AppModel
@@ -12,6 +21,7 @@ struct TaskEditorView: View {
     @State private var kind: TaskKind
     @State private var recurrenceFrequency: RecurrenceFrequency
     @State private var selectedWeekdays: Set<Int>
+    @State private var recurrenceStartDay: LocalDay
     @State private var reminderMode: ReminderMode
     @State private var reminderTime: Date
     @State private var isSaving = false
@@ -47,6 +57,12 @@ struct TaskEditorView: View {
         _kind = State(initialValue: resolvedTemplate?.kind ?? .once)
         _recurrenceFrequency = State(initialValue: recurrence?.frequency ?? .daily)
         _selectedWeekdays = State(initialValue: recurrence?.weekdays ?? [])
+        _recurrenceStartDay = State(
+            initialValue: TaskEditorRecurrenceStartDay.resolve(
+                template: resolvedTemplate,
+                currentDay: model.currentDay
+            )
+        )
         _reminderMode = State(
             initialValue: task?.reminderMode ?? resolvedTemplate?.reminderMode ?? .none
         )
@@ -199,7 +215,7 @@ struct TaskEditorView: View {
             ? RecurrenceRule(
                 frequency: recurrenceFrequency,
                 weekdays: recurrenceFrequency == .selectedWeekdays ? selectedWeekdays : [],
-                startDay: LocalDay(date: .now, calendar: calendar)
+                startDay: recurrenceStartDay
             )
             : nil
 

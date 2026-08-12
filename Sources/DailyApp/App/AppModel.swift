@@ -208,6 +208,8 @@ final class AppModel {
         todayTasks.isEmpty ? 0 : Double(completedCount) / Double(todayTasks.count)
     }
 
+    var currentDay: LocalDay { today }
+
     func history(weekContaining day: LocalDay) throws -> [HistoryDaySummary] {
         let calendar = dayProvider.calendar
         let startDate = calendar.dateInterval(
@@ -272,12 +274,20 @@ final class AppModel {
     @discardableResult
     func update(_ task: DailyTask, with draft: TaskDraft) async -> MutationResult {
         do {
-            try await taskService.update(
-                templateID: task.templateID,
-                draft: draft,
-                on: today,
-                now: dayProvider.now
-            )
+            if try repository.template(id: task.templateID) == nil {
+                try await taskService.updateInstance(
+                    id: task.id,
+                    draft: draft,
+                    now: dayProvider.now
+                )
+            } else {
+                try await taskService.update(
+                    templateID: task.templateID,
+                    draft: draft,
+                    on: today,
+                    now: dayProvider.now
+                )
+            }
         } catch {
             if (error as? TaskServiceError) == .notificationSyncFailed {
                 reloadAfterSavedMutation(
@@ -355,13 +365,16 @@ final class AppModel {
         return reloadAfterTemplateMutation() ? .success : .partialSuccess
     }
 
-    func loadReminderSettings() async {
+    func loadReminderSettings() {
         do {
             apply(try reminderSettingsService.settings())
             errorMessage = nil
         } catch {
             errorMessage = "读取提醒设置失败。请重试。"
         }
+    }
+
+    func refreshNotificationAuthorizationStatus() async {
         notificationAuthorizationStatus = await notificationService.authorizationStatus()
     }
 

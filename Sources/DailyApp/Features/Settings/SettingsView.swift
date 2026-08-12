@@ -2,33 +2,57 @@ import DailyCore
 import SwiftUI
 import UserNotifications
 
+@MainActor
+struct SettingsPresentationState {
+    var dailyReminderEnabled = false
+    var dailyReminderTime = Date.now
+    var persistentIntervalMinutes = 15
+    private(set) var isHydrated = false
+
+    mutating func hydrate(
+        from model: AppModel,
+        calendar: Calendar = .autoupdatingCurrent
+    ) {
+        guard !isHydrated else { return }
+        dailyReminderEnabled = model.dailyReminderEnabled
+        persistentIntervalMinutes = Self.intervalChoices.contains(
+            model.persistentIntervalMinutes
+        ) ? model.persistentIntervalMinutes : 15
+        dailyReminderTime = calendar.date(
+            from: DateComponents(
+                hour: model.dailyReminderHour,
+                minute: model.dailyReminderMinute
+            )
+        ) ?? .now
+        isHydrated = true
+    }
+
+    static let intervalChoices = [5, 10, 15, 30, 60]
+}
+
 struct SettingsView: View {
     @Bindable var model: AppModel
 
-    @State private var dailyReminderEnabled = false
-    @State private var dailyReminderTime = Date.now
-    @State private var persistentIntervalMinutes = 15
+    @State private var presentation = SettingsPresentationState()
     @State private var isSaving = false
-
-    private let intervalChoices = [5, 10, 15, 30, 60]
 
     var body: some View {
         Form {
             Section("每日提醒") {
-                Toggle("启用每日提醒", isOn: $dailyReminderEnabled)
+                Toggle("启用每日提醒", isOn: $presentation.dailyReminderEnabled)
 
-                if dailyReminderEnabled {
+                if presentation.dailyReminderEnabled {
                     DatePicker(
                         "提醒时间",
-                        selection: $dailyReminderTime,
+                        selection: $presentation.dailyReminderTime,
                         displayedComponents: .hourAndMinute
                     )
                 }
             }
 
             Section("持续提醒") {
-                Picker("重复间隔", selection: $persistentIntervalMinutes) {
-                    ForEach(intervalChoices, id: \.self) { minutes in
+                Picker("重复间隔", selection: $presentation.persistentIntervalMinutes) {
+                    ForEach(SettingsPresentationState.intervalChoices, id: \.self) { minutes in
                         Text("\(minutes) 分钟").tag(minutes)
                     }
                 }
@@ -71,8 +95,9 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .navigationTitle("设置")
         .task {
-            await model.loadReminderSettings()
-            hydrateForm()
+            model.loadReminderSettings()
+            presentation.hydrate(from: model)
+            await model.refreshNotificationAuthorizationStatus()
         }
     }
 
@@ -93,33 +118,20 @@ struct SettingsView: View {
         }
     }
 
-    private func hydrateForm() {
-        dailyReminderEnabled = model.dailyReminderEnabled
-        persistentIntervalMinutes = intervalChoices.contains(model.persistentIntervalMinutes)
-            ? model.persistentIntervalMinutes
-            : 15
-        dailyReminderTime = Calendar.autoupdatingCurrent.date(
-            from: DateComponents(
-                hour: model.dailyReminderHour,
-                minute: model.dailyReminderMinute
-            )
-        ) ?? .now
-    }
-
     private func save() {
         guard !isSaving else { return }
         isSaving = true
         let components = Calendar.autoupdatingCurrent.dateComponents(
             [.hour, .minute],
-            from: dailyReminderTime
+            from: presentation.dailyReminderTime
         )
 
         Task { @MainActor in
             _ = await model.saveReminderSettings(
-                enabled: dailyReminderEnabled,
-                hour: dailyReminderEnabled ? components.hour : nil,
-                minute: dailyReminderEnabled ? components.minute : nil,
-                persistentIntervalMinutes: persistentIntervalMinutes
+                enabled: presentation.dailyReminderEnabled,
+                hour: presentation.dailyReminderEnabled ? components.hour : nil,
+                minute: presentation.dailyReminderEnabled ? components.minute : nil,
+                persistentIntervalMinutes: presentation.persistentIntervalMinutes
             )
             isSaving = false
         }

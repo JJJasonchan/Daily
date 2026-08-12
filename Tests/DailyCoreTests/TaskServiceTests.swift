@@ -169,6 +169,83 @@ final class TaskServiceTests: XCTestCase {
         XCTAssertEqual(notifications.cancelledTaskIDs, [todayTask.id])
     }
 
+    func testUpdateOrphanTaskChangesOnlyThatInstanceSnapshotAndDoesNotRestoreTemplate() async throws {
+        let templateID = UUID()
+        let historicalTask = DailyTask(
+            templateID: templateID,
+            dayKey: "2026-08-11",
+            titleSnapshot: "Historical title",
+            reminderMode: .once,
+            reminderHour: 8,
+            reminderMinute: 0
+        )
+        let todayTask = DailyTask(
+            templateID: templateID,
+            dayKey: day.rawValue,
+            titleSnapshot: "Today title"
+        )
+        let repository = TestTaskRepository(tasks: [historicalTask, todayTask])
+        let notifications = RecordingNotificationScheduler()
+        let service = TaskService(repository: repository, notifications: notifications)
+
+        try await service.updateInstance(
+            id: todayTask.id,
+            draft: TaskDraft(
+                title: "  Edited today  ",
+                kind: .once,
+                reminderMode: .persistent,
+                reminderHour: 10,
+                reminderMinute: 20
+            ),
+            now: now
+        )
+
+        XCTAssertTrue(repository.storedTemplates.isEmpty)
+        XCTAssertEqual(todayTask.titleSnapshot, "Edited today")
+        XCTAssertEqual(todayTask.reminderMode, .persistent)
+        XCTAssertEqual(todayTask.reminderHour, 10)
+        XCTAssertEqual(todayTask.reminderMinute, 20)
+        XCTAssertEqual(historicalTask.titleSnapshot, "Historical title")
+        XCTAssertEqual(historicalTask.reminderMode, .once)
+        XCTAssertEqual(notifications.syncedTaskIDs, [todayTask.id])
+    }
+
+    func testUpdatingRecurringTemplatePreservesOriginalRecurrenceStartDay() async throws {
+        let originalStart = LocalDay(rawValue: "2026-07-01")
+        let template = TaskTemplate(
+            title: "Read",
+            kind: .recurring,
+            recurrence: RecurrenceRule(
+                frequency: .daily,
+                weekdays: [],
+                startDay: originalStart
+            )
+        )
+        let repository = TestTaskRepository(templates: [template])
+        let service = TaskService(
+            repository: repository,
+            notifications: RecordingNotificationScheduler()
+        )
+
+        try await service.update(
+            templateID: template.id,
+            draft: TaskDraft(
+                title: "Read weekdays",
+                kind: .recurring,
+                recurrence: RecurrenceRule(
+                    frequency: .weekdays,
+                    weekdays: [],
+                    startDay: LocalDay(rawValue: "2026-08-12")
+                )
+            ),
+            on: day,
+            now: now
+        )
+
+        XCTAssertEqual(template.recurrence?.frequency, .weekdays)
+        XCTAssertEqual(template.recurrence?.startDay, originalStart)
+    }
+
     func testUpdateChangesTemplateAndTodaysIncompleteSnapshot() async throws {
         let template = recurringTemplate(title: "Old", reminderMode: .once, hour: 8, minute: 0)
         let task = DailyTask(
