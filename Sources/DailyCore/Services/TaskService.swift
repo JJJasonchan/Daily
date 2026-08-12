@@ -173,8 +173,8 @@ public final class TaskService {
     }
 
     private func syncNotification(for task: DailyTask, now: Date) async throws {
-        let settings = try repository.settings()
         do {
+            let settings = try repository.settings()
             try await notifications.sync(
                 task: task,
                 persistentIntervalMinutes: settings.persistentIntervalMinutes,

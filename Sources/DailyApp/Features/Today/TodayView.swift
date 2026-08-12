@@ -159,15 +159,18 @@ struct TodayView: View {
             pendingCompletion[task.id] = targetCompletion
         }
 
+        let command = model.enqueueCompletion(task, completed: targetCompletion)
         Task { @MainActor in
-            let token = await model.toggle(task)
+            let token = await command.value
+            var didPublishToken = false
             withAnimation(animation) {
-                pendingCompletion[task.id] = nil
-                if let token {
+                if pendingCompletion[task.id] == targetCompletion {
+                    pendingCompletion[task.id] = nil
                     undoToken = token
+                    didPublishToken = token != nil
                 }
             }
-            if let token {
+            if let token, didPublishToken {
                 scheduleUndoDismissal(for: token)
             }
         }
@@ -193,8 +196,6 @@ struct TodayView: View {
         withAnimation(motion.animation) {
             undoToken = nil
         }
-        Task { @MainActor in
-            await model.undo(token)
-        }
+        _ = model.enqueueUndo(token)
     }
 }

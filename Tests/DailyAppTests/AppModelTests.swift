@@ -118,6 +118,26 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(fixture.repository.storedTasks.map(\.titleSnapshot), ["Water plants"])
     }
 
+    func testAddSettingsReadFailureAfterSaveIsDismissableAndWritesOnlyOnce() async {
+        let fixture = makeFixture()
+        fixture.repository.shouldFailSettings = true
+
+        let result = await fixture.model.add(
+            TaskDraft(
+                title: "Water plants",
+                reminderMode: .once,
+                reminderHour: 9,
+                reminderMinute: 0
+            )
+        )
+
+        XCTAssertEqual(result, .partialSuccess)
+        XCTAssertTrue(result.shouldDismissEditor)
+        XCTAssertEqual(fixture.repository.saveCallCount, 1)
+        XCTAssertEqual(fixture.repository.storedTemplates.count, 1)
+        XCTAssertEqual(fixture.repository.storedTasks.map(\.titleSnapshot), ["Water plants"])
+    }
+
     func testUpdateRoutesTaskEditorChangesThroughModelAndReloadsToday() async throws {
         let template = TaskTemplate(title: "Old title")
         let task = DailyTask(
@@ -158,6 +178,34 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(result, .partialSuccess)
         XCTAssertTrue(result.shouldDismissEditor)
         XCTAssertEqual(fixture.repository.saveCallCount, 1)
+        XCTAssertEqual(fixture.repository.storedTasks.map(\.titleSnapshot), ["New title"])
+    }
+
+    func testUpdateSettingsReadFailureAfterSaveIsDismissableAndWritesOnlyOnce() async throws {
+        let template = TaskTemplate(title: "Old title")
+        let task = DailyTask(
+            templateID: template.id,
+            dayKey: day.rawValue,
+            titleSnapshot: template.title
+        )
+        let fixture = makeFixture(templates: [template], tasks: [task])
+        try fixture.model.reload()
+        fixture.repository.shouldFailSettings = true
+
+        let result = await fixture.model.update(
+            task,
+            with: TaskDraft(
+                title: "New title",
+                reminderMode: .once,
+                reminderHour: 10,
+                reminderMinute: 30
+            )
+        )
+
+        XCTAssertEqual(result, .partialSuccess)
+        XCTAssertTrue(result.shouldDismissEditor)
+        XCTAssertEqual(fixture.repository.saveCallCount, 1)
+        XCTAssertEqual(fixture.repository.storedTemplates.count, 1)
         XCTAssertEqual(fixture.repository.storedTasks.map(\.titleSnapshot), ["New title"])
     }
 
@@ -255,6 +303,69 @@ final class AppModelTests: XCTestCase {
         XCTAssertNotNil(fixture.model.todayTasks.first { $0.id == firstTask.id }?.completedAt)
         XCTAssertNil(fixture.model.todayTasks.first { $0.id == secondTask.id }?.completedAt)
         XCTAssertNil(fixture.model.lastCompletionUndo)
+    }
+
+    func testRapidCompleteThenUncompleteRunsCompletionCommandsFIFO() async throws {
+        let template = TaskTemplate(title: "Walk")
+        let task = DailyTask(
+            templateID: template.id,
+            dayKey: day.rawValue,
+            titleSnapshot: template.title,
+            reminderMode: .once,
+            reminderHour: 9,
+            reminderMinute: 0
+        )
+        let fixture = makeFixture(templates: [template], tasks: [task])
+        try fixture.model.reload()
+        fixture.notifications.blockNextCancel()
+
+        let complete = fixture.model.enqueueCompletion(task, completed: true)
+        await fixture.notifications.waitUntilCancelIsBlocked()
+        let uncomplete = fixture.model.enqueueCompletion(task, completed: false)
+        for _ in 0..<5 { await Task.yield() }
+
+        XCTAssertEqual(fixture.notifications.maximumConcurrentCompletionSyncCount, 1)
+        XCTAssertTrue(fixture.notifications.syncedTaskIDs.isEmpty)
+
+        fixture.notifications.resumeBlockedCancel()
+        _ = await complete.value
+        let finalToken = await uncomplete.value
+
+        XCTAssertEqual(fixture.notifications.maximumConcurrentCompletionSyncCount, 1)
+        XCTAssertEqual(fixture.notifications.syncedTaskIDs, [task.id])
+        XCTAssertNil(fixture.model.todayTasks.first?.completedAt)
+        XCTAssertEqual(fixture.model.lastCompletionUndo, finalToken)
+    }
+
+    func testDifferentTaskCompletionSubmissionOrderDeterminesCurrentUndoToken() async throws {
+        let firstTemplate = TaskTemplate(title: "First")
+        let secondTemplate = TaskTemplate(title: "Second")
+        let firstTask = DailyTask(
+            templateID: firstTemplate.id,
+            dayKey: day.rawValue,
+            titleSnapshot: firstTemplate.title
+        )
+        let secondTask = DailyTask(
+            templateID: secondTemplate.id,
+            dayKey: day.rawValue,
+            titleSnapshot: secondTemplate.title
+        )
+        let fixture = makeFixture(
+            templates: [firstTemplate, secondTemplate],
+            tasks: [firstTask, secondTask]
+        )
+        try fixture.model.reload()
+        fixture.notifications.blockNextCancel()
+
+        let first = fixture.model.enqueueCompletion(firstTask, completed: true)
+        await fixture.notifications.waitUntilCancelIsBlocked()
+        let second = fixture.model.enqueueCompletion(secondTask, completed: true)
+        fixture.notifications.resumeBlockedCancel()
+        _ = await first.value
+        let secondToken = await second.value
+
+        XCTAssertEqual(fixture.notifications.cancelledTaskIDs, [firstTask.id, secondTask.id])
+        XCTAssertEqual(fixture.model.lastCompletionUndo, secondToken)
     }
 
     func testFailedAddPreservesCurrentListAndShowsSpecificError() async throws {
@@ -536,6 +647,7 @@ private final class AppModelTestRepository: TaskRepository {
     var storedTasks: [DailyTask]
     let storedSettings: AppSettings
     var shouldFailReads = false
+    var shouldFailSettings = false
     var failReadsAfterNextSave = false
     private(set) var dailyTasksCallCount = 0
     private(set) var saveCallCount = 0
@@ -579,7 +691,10 @@ private final class AppModelTestRepository: TaskRepository {
     func insert(_ template: TaskTemplate) { storedTemplates.append(template) }
     func insert(_ task: DailyTask) { storedTasks.append(task) }
     func remove(_ task: DailyTask) { storedTasks.removeAll { $0.id == task.id } }
-    func settings() throws -> AppSettings { storedSettings }
+    func settings() throws -> AppSettings {
+        if shouldFailSettings { throw Failure.read }
+        return storedSettings
+    }
     func save() throws {
         saveCallCount += 1
         if failReadsAfterNextSave {
@@ -593,6 +708,14 @@ private final class AppModelTestRepository: TaskRepository {
 private final class AppModelNotificationScheduler: NotificationScheduling {
     enum Failure: Error { case sync }
     var shouldFailSync = false
+    private(set) var cancelledTaskIDs: [UUID] = []
+    private(set) var syncedTaskIDs: [UUID] = []
+    private(set) var maximumConcurrentCompletionSyncCount = 0
+    private var activeCompletionSyncCount = 0
+    private var shouldBlockNextCancel = false
+    private var blockedCancelContinuation: CheckedContinuation<Void, Never>?
+    private var blockedCancelStartWaiter: CheckedContinuation<Void, Never>?
+    private var hasBlockedCancel = false
     private(set) var rebuildCallCount = 0
     private(set) var maximumConcurrentRebuildCount = 0
     private var activeRebuildCount = 0
@@ -602,10 +725,34 @@ private final class AppModelNotificationScheduler: NotificationScheduling {
     private var hasBlockedRebuild = false
 
     func sync(task: DailyTask, persistentIntervalMinutes: Int, now: Date) async throws {
+        activeCompletionSyncCount += 1
+        maximumConcurrentCompletionSyncCount = max(
+            maximumConcurrentCompletionSyncCount,
+            activeCompletionSyncCount
+        )
+        defer { activeCompletionSyncCount -= 1 }
+        syncedTaskIDs.append(task.id)
         if shouldFailSync { throw Failure.sync }
     }
 
-    func cancel(taskID: UUID) async {}
+    func cancel(taskID: UUID) async {
+        activeCompletionSyncCount += 1
+        maximumConcurrentCompletionSyncCount = max(
+            maximumConcurrentCompletionSyncCount,
+            activeCompletionSyncCount
+        )
+        defer { activeCompletionSyncCount -= 1 }
+        cancelledTaskIDs.append(taskID)
+        if shouldBlockNextCancel {
+            shouldBlockNextCancel = false
+            hasBlockedCancel = true
+            blockedCancelStartWaiter?.resume()
+            blockedCancelStartWaiter = nil
+            await withCheckedContinuation { continuation in
+                blockedCancelContinuation = continuation
+            }
+        }
+    }
 
     func syncDailyReminder(settings: AppSettings, now: Date) async throws {
         if shouldFailSync { throw Failure.sync }
@@ -642,6 +789,22 @@ private final class AppModelNotificationScheduler: NotificationScheduling {
     func resumeBlockedRebuild() {
         blockedRebuildContinuation?.resume()
         blockedRebuildContinuation = nil
+    }
+
+    func blockNextCancel() {
+        shouldBlockNextCancel = true
+    }
+
+    func waitUntilCancelIsBlocked() async {
+        if hasBlockedCancel { return }
+        await withCheckedContinuation { continuation in
+            blockedCancelStartWaiter = continuation
+        }
+    }
+
+    func resumeBlockedCancel() {
+        blockedCancelContinuation?.resume()
+        blockedCancelContinuation = nil
     }
 }
 

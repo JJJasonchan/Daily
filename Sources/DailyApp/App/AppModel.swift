@@ -128,6 +128,8 @@ final class AppModel {
     private var refreshSequence: UInt = 0
     private var pendingRefresh: RefreshRequest?
     private var lifecycleRefreshTask: Task<Void, Never>?
+    private var completionCommandTail: Task<Void, Never>?
+    private var queuedCompletionTargets: [UUID: Bool] = [:]
 
     init(
         taskService: TaskService,
@@ -214,16 +216,52 @@ final class AppModel {
 
     @discardableResult
     func toggle(_ task: DailyTask) async -> CompletionUndoToken? {
-        let wasCompleted = task.completedAt != nil
+        let currentCompletion = queuedCompletionTargets[task.id] ?? (task.completedAt != nil)
+        return await enqueueCompletion(
+            task,
+            completed: !currentCompletion
+        ).value
+    }
+
+    func enqueueCompletion(
+        _ task: DailyTask,
+        completed: Bool
+    ) -> Task<CompletionUndoToken?, Never> {
+        let predecessor = completionCommandTail
+        queuedCompletionTargets[task.id] = completed
+        let command = Task<CompletionUndoToken?, Never> { @MainActor [weak self] in
+            await predecessor?.value
+            guard let self else { return nil }
+            let token = await performSetCompletion(
+                taskID: task.id,
+                completed: completed,
+                wasCompleted: !completed
+            )
+            if queuedCompletionTargets[task.id] == completed {
+                queuedCompletionTargets[task.id] = nil
+            }
+            return token
+        }
+        completionCommandTail = Task { @MainActor in
+            _ = await command.value
+        }
+        return command
+    }
+
+    private func performSetCompletion(
+        taskID: UUID,
+        completed: Bool,
+        wasCompleted: Bool
+    ) async -> CompletionUndoToken? {
         let undoToken = CompletionUndoToken(
             id: UUID(),
-            taskID: task.id,
+            taskID: taskID,
             wasCompleted: wasCompleted
         )
         do {
             try await taskService.setCompleted(
-                id: task.id,
-                completed: !wasCompleted,
+                id: taskID,
+                completed: completed,
                 at: dayProvider.now
             )
         } catch {
@@ -247,6 +285,20 @@ final class AppModel {
     }
 
     func undo(_ token: CompletionUndoToken) async {
+        await enqueueUndo(token).value
+    }
+
+    func enqueueUndo(_ token: CompletionUndoToken) -> Task<Void, Never> {
+        let predecessor = completionCommandTail
+        let command = Task { @MainActor [weak self] in
+            await predecessor?.value
+            await self?.performUndo(token)
+        }
+        completionCommandTail = command
+        return command
+    }
+
+    private func performUndo(_ token: CompletionUndoToken) async {
         guard lastCompletionUndo == token else { return }
         do {
             try await taskService.setCompleted(
