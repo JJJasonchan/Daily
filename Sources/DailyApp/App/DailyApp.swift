@@ -1,19 +1,63 @@
+import Carbon.HIToolbox
 import SwiftUI
+
+@MainActor
+private var sharedQuickCapture: QuickCaptureWindow?
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var globalMonitor: Any?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.activate(ignoringOtherApps: true)
+        registerGlobalShortcut()
+        ensureMenuBarPanelFollowsSystemAppearance()
+    }
+
+    private func ensureMenuBarPanelFollowsSystemAppearance() {
+        // MenuBarExtra creates an NSPanel; set appearance=nil to follow system
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            for window in NSApp.windows where window is NSPanel {
+                window.appearance = nil
+            }
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        if let monitor = globalMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+    }
+
+    private func registerGlobalShortcut() {
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
+            guard event.modifierFlags.contains([.command, .shift]),
+                  event.keyCode == 40 // K key
+            else { return }
+            Task { @MainActor in
+                sharedQuickCapture?.show()
+            }
+        }
+    }
+}
 
 @main
 @MainActor
 struct DailyApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openWindow) private var openWindow
     @State private var sceneState: AppSceneState
 
     init() {
         let model = AppDependencies.live().appModel
         _sceneState = State(initialValue: AppSceneState(model: model))
+        sharedQuickCapture = QuickCaptureWindow(model: model)
     }
 
     var body: some Scene {
         Window("Daily", id: "main") {
             AppShellView(model: sceneState.windowModel)
+                .focusEffectDisabled()
                 .task {
                     await sceneState.activate()
                 }
@@ -22,6 +66,9 @@ struct DailyApp: App {
                     Task { @MainActor in
                         await sceneState.activate()
                     }
+                }
+                .onAppear {
+                    NSApp.activate(ignoringOtherApps: true)
                 }
         }
         .defaultSize(width: 980, height: 680)
@@ -32,6 +79,7 @@ struct DailyApp: App {
 
         MenuBarExtra {
             MenuBarContentView(model: sceneState.menuBarModel)
+                .focusEffectDisabled()
                 .task {
                     await sceneState.activate()
                 }
@@ -54,6 +102,14 @@ private struct DailyCommands: Commands {
                 router.focusQuickAdd()
             }
             .keyboardShortcut("a", modifiers: [.command, .shift])
+        }
+
+        CommandGroup(after: .appSettings) {
+            Button("设置...") {
+                showMainWindow()
+                router.navigate(to: .settings)
+            }
+            .keyboardShortcut(",", modifiers: .command)
         }
 
         CommandMenu("导航") {
