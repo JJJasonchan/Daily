@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         registerGlobalShortcut()
         ensureMenuBarPanelFollowsSystemAppearance()
+        observeColorSchemeChanges()
     }
 
     private func ensureMenuBarPanelFollowsSystemAppearance() {
@@ -20,6 +21,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             for window in NSApp.windows where window is NSPanel {
                 window.appearance = NSAppearance.from(colorSchemeMode: sharedModel?.colorSchemeMode ?? .system)
+            }
+        }
+    }
+
+    private func observeColorSchemeChanges() {
+        // When color scheme setting changes, update the menu bar NSPanel appearance
+        NotificationCenter.default.addObserver(
+            forName: .dailyColorSchemeModeDidChange,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                for window in NSApp.windows where window is NSPanel {
+                    window.appearance = NSAppearance.from(
+                        colorSchemeMode: sharedModel?.colorSchemeMode ?? .system
+                    )
+                }
             }
         }
     }
@@ -60,7 +78,6 @@ struct DailyApp: App {
     var body: some Scene {
         Window("Daily", id: "main") {
             AppShellView(model: sceneState.windowModel)
-                .preferredColorScheme(sceneState.model.colorSchemeMode.swiftUIColorScheme)
                 .focusEffectDisabled()
                 .task {
                     await sceneState.activate()
@@ -83,7 +100,6 @@ struct DailyApp: App {
 
         MenuBarExtra {
             MenuBarContentView(model: sceneState.menuBarModel)
-                .preferredColorScheme(sceneState.model.colorSchemeMode.swiftUIColorScheme)
                 .focusEffectDisabled()
                 .task {
                     await sceneState.activate()

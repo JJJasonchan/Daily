@@ -217,9 +217,9 @@ struct HistoryView: View {
 
     private func statusSymbol(_ status: HistoryStatus) -> String {
         switch status {
-        case .completed: "checkmark.circle.fill"
-        case .incomplete: "circle"
-        case .rolledOver: "arrow.forward.circle"
+        case .completed: "✅"
+        case .incomplete: "⬜"
+        case .rolledOver: "➡️"
         }
     }
 

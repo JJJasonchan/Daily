@@ -61,6 +61,7 @@ struct RulesView: View {
             }
         }
         .navigationTitle("重复规则")
+        .focusEffectDisabled()
     }
 
     private func ruleRow(_ template: TaskTemplate) -> some View {
@@ -185,6 +186,12 @@ struct RulesView: View {
         case .selectedWeekdays:
             let names = [1: "日", 2: "一", 3: "二", 4: "三", 5: "四", 6: "五", 7: "六"]
             return recurrence.weekdays.sorted().compactMap { names[$0] }.map { "周\($0)" }.joined(separator: "、")
+        case .monthly:
+            if let dom = recurrence.dayOfMonth {
+                return "每月 \(dom) 日"
+            } else {
+                return "每月最后一天"
+            }
         }
     }
 

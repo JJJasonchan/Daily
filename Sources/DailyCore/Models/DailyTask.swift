@@ -16,6 +16,7 @@ public final class DailyTask {
     public var originalDayKey: String
     public var rolloverCount: Int
     public var createdAt: Date
+    public var scheduledDayKey: String?
 
     public init(
         id: UUID = UUID(),
@@ -30,7 +31,8 @@ public final class DailyTask {
         rolloverOriginID: UUID? = nil,
         originalDayKey: String? = nil,
         rolloverCount: Int = 0,
-        createdAt: Date = .now
+        createdAt: Date = .now,
+        scheduledDayKey: String? = nil
     ) {
         self.id = id
         self.templateID = templateID
@@ -45,6 +47,7 @@ public final class DailyTask {
         self.originalDayKey = originalDayKey ?? dayKey
         self.rolloverCount = rolloverCount
         self.createdAt = createdAt
+        self.scheduledDayKey = scheduledDayKey
     }
 
     public var reminderMode: ReminderMode {

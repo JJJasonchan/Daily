@@ -49,7 +49,8 @@ public final class TaskService {
             reminderHour: draft.reminderHour,
             reminderMinute: draft.reminderMinute,
             sortIndex: sortIndex,
-            createdAt: now
+            createdAt: now,
+            scheduledDayKey: draft.scheduledDay?.rawValue
         )
 
         repository.insert(template)

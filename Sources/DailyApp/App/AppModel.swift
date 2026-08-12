@@ -791,6 +791,7 @@ final class AppModel {
         colorSchemeMode = mode
         do {
             try reminderSettingsService.saveColorSchemeMode(mode)
+            NotificationCenter.default.post(name: .dailyColorSchemeModeDidChange, object: nil)
         } catch {
             errorMessage = "保存外观设置失败。请重试。"
         }

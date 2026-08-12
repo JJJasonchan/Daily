@@ -9,9 +9,11 @@ struct AppShellView: View {
             SidebarView(model: model)
         } detail: {
             detail
-                .background(Color(nsColor: .windowBackgroundColor))
+                .background(.ultraThinMaterial)
         }
+        .preferredColorScheme(model.colorSchemeMode.swiftUIColorScheme)
         .navigationSplitViewStyle(.balanced)
+        .focusEffectDisabled()
         .sheet(isPresented: editorPresentation) {
             if let editingTemplate {
                 TaskEditorView(model: model, template: editingTemplate)
@@ -78,5 +80,4 @@ struct AppShellView: View {
             }
         )
     }
-
 }

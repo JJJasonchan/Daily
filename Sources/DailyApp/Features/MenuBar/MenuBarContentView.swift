@@ -52,14 +52,13 @@ struct MenuBarContentView: View {
                 emptyState
             } else {
                 ScrollView {
-                    GlassEffectContainer(spacing: 8) {
-                        LazyVStack(spacing: 8) {
-                            ForEach(model.todayTasks) { task in
-                                taskRow(task)
-                            }
+                    LazyVStack(spacing: 8) {
+                        ForEach(model.todayTasks) { task in
+                            taskRow(task)
                         }
                     }
-                    .padding(.vertical, 1)
+                    .padding(10)
+                    .glassModule(interactive: false, cornerRadius: 18)
                 }
                 .frame(maxHeight: 330)
             }
@@ -87,10 +86,13 @@ struct MenuBarContentView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderless)
+            .focusEffectDisabled()
             .frame(height: 38)
             .glassModule(interactive: true, cornerRadius: 13)
             .accessibilityHint("打开并置前主窗口")
         }
+
+        .preferredColorScheme(model.colorSchemeMode.swiftUIColorScheme)
         .padding(14)
         .frame(width: 360)
         .onDisappear {
@@ -101,7 +103,7 @@ struct MenuBarContentView: View {
     private var progressHeader: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text("今日")
+                Text("✅ 今日")
                     .font(.title2.weight(.bold))
                 Spacer()
                 Text("\(effectiveCompletedCount) / \(model.todayTasks.count)")
@@ -167,7 +169,11 @@ struct MenuBarContentView: View {
             .frame(minHeight: 46)
         }
         .buttonStyle(.plain)
-        .glassModule(interactive: true, cornerRadius: 14)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.primary.opacity(completed ? 0.03 : 0.0))
+        }
+        .opacity(completed ? 0.72 : 1)
         .accessibilityLabel(task.titleSnapshot)
         .accessibilityValue(completed ? "已完成" : "未完成")
         .accessibilityHint(completed ? "取消完成" : "标记完成")
@@ -183,6 +189,7 @@ struct MenuBarContentView: View {
                 .accessibilityLabel("菜单栏新任务标题")
             Button("添加", action: addTask)
                 .buttonStyle(.borderless)
+                .focusEffectDisabled()
                 .disabled(trimmedQuickAddTitle.isEmpty || isAdding)
         }
         .padding(.horizontal, 13)
@@ -251,6 +258,7 @@ struct MenuBarContentView: View {
                 undo(token)
             }
             .buttonStyle(.borderless)
+            .focusEffectDisabled()
             .disabled(isUndoing)
         }
         .padding(.horizontal, 13)

@@ -29,3 +29,7 @@ extension NSAppearance {
         }
     }
 }
+
+extension Notification.Name {
+    static let dailyColorSchemeModeDidChange = Notification.Name("dailyColorSchemeModeDidChange")
+}

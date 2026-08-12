@@ -15,6 +15,7 @@ struct QuickAddView: View {
             TextField("添加今日任务", text: $title)
                 .textFieldStyle(.plain)
                 .focused($isFocused)
+                .focusEffectDisabled(true)
                 .onSubmit(addTask)
                 .accessibilityLabel("新任务标题")
 

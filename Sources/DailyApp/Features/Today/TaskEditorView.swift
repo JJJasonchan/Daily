@@ -50,7 +50,10 @@ struct TaskEditorView: View {
     @State private var kind: TaskKind
     @State private var recurrenceFrequency: RecurrenceFrequency
     @State private var selectedWeekdays: Set<Int>
+    @State private var dayOfMonth: Int
     @State private var recurrenceStartDay: LocalDay
+    @State private var scheduledDate: Date?
+    @State private var hasScheduledDate: Bool
     @State private var reminderMode: ReminderMode
     @State private var reminderTime: Date
     @State private var isSaving = false
@@ -87,12 +90,21 @@ struct TaskEditorView: View {
         _kind = State(initialValue: resolvedTemplate?.kind ?? .once)
         _recurrenceFrequency = State(initialValue: recurrence?.frequency ?? .daily)
         _selectedWeekdays = State(initialValue: recurrence?.weekdays ?? [])
+        _dayOfMonth = State(initialValue: recurrence?.dayOfMonth ?? 1)
         _recurrenceStartDay = State(
             initialValue: TaskEditorRecurrenceStartDay.resolve(
                 template: resolvedTemplate,
                 currentDay: model.currentDay
             )
         )
+        if let scheduledKey = task?.scheduledDayKey {
+            let day = LocalDay(rawValue: scheduledKey)
+            _scheduledDate = State(initialValue: day.date(in: Calendar.autoupdatingCurrent))
+            _hasScheduledDate = State(initialValue: true)
+        } else {
+            _scheduledDate = State(initialValue: nil)
+            _hasScheduledDate = State(initialValue: false)
+        }
         _reminderMode = State(
             initialValue: task?.reminderMode ?? resolvedTemplate?.reminderMode ?? .none
         )
@@ -119,6 +131,7 @@ struct TaskEditorView: View {
 
             Form {
                 TextField("任务标题", text: $title)
+                    .focusEffectDisabled(true)
                     .accessibilityLabel("任务标题")
 
                 if mode.showsTaskType {
@@ -129,16 +142,57 @@ struct TaskEditorView: View {
                     .pickerStyle(.segmented)
                 }
 
+                Section("计划日期") {
+                    Toggle("指定日期执行", isOn: $hasScheduledDate)
+                    if hasScheduledDate {
+                        DatePicker(
+                            "执行日期",
+                            selection: Binding(
+                                get: { scheduledDate ?? Date() },
+                                set: { scheduledDate = $0 }
+                            ),
+                            displayedComponents: .date
+                        )
+                        Text(kind == .recurring
+                            ? "重复任务将从此日期开始生效。"
+                            : "单次任务将仅在此日期出现在今日列表中。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 if mode.showsRecurrence && kind == .recurring {
                     Section("重复规则") {
                         Picker("频率", selection: $recurrenceFrequency) {
                             Text("每天").tag(RecurrenceFrequency.daily)
                             Text("工作日").tag(RecurrenceFrequency.weekdays)
-                            Text("选择星期").tag(RecurrenceFrequency.selectedWeekdays)
+                            Text("固定星期").tag(RecurrenceFrequency.selectedWeekdays)
+                            Text("每月").tag(RecurrenceFrequency.monthly)
                         }
 
                         if recurrenceFrequency == .selectedWeekdays {
+                            Text("选择重复的星期：")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                             weekdayPicker
+                        }
+
+                        if recurrenceFrequency == .monthly {
+                            HStack {
+                                Text("日期")
+                                Spacer()
+                                Picker("日期", selection: $dayOfMonth) {
+                                    ForEach(1..<29) { day in
+                                        Text("\(day) 日").tag(day)
+                                    }
+                                    Text("月末最后一天").tag(31)
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                            }
+                            Text("如当月无该日期（如 31 日），自动取月末最后一天。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -177,10 +231,11 @@ struct TaskEditorView: View {
             .padding(20)
         }
         .frame(
-            width: 470,
-            height: mode.showsRecurrence && kind == .recurring ? 560 : 420
+            width: 500,
+            height: mode.showsRecurrence && kind == .recurring ? 640 : 500
         )
         .accessibilityElement(children: .contain)
+        .focusEffectDisabled()
     }
 
     private var weekdayPicker: some View {
@@ -247,11 +302,18 @@ struct TaskEditorView: View {
     private func makeDraft() -> TaskDraft {
         let calendar = Calendar.autoupdatingCurrent
         let components = calendar.dateComponents([.hour, .minute], from: reminderTime)
+        let effectiveDayOfMonth = recurrenceFrequency == .monthly
+            ? (dayOfMonth == 31 ? nil : dayOfMonth)
+            : nil
+        let scheduledDayValue: LocalDay? = hasScheduledDate && scheduledDate != nil
+            ? LocalDay(date: scheduledDate!, calendar: calendar)
+            : nil
         let recurrence = kind == .recurring
             ? RecurrenceRule(
                 frequency: recurrenceFrequency,
                 weekdays: recurrenceFrequency == .selectedWeekdays ? selectedWeekdays : [],
-                startDay: recurrenceStartDay
+                dayOfMonth: effectiveDayOfMonth,
+                startDay: scheduledDayValue ?? recurrenceStartDay
             )
             : nil
 
@@ -259,6 +321,7 @@ struct TaskEditorView: View {
             title: title,
             kind: kind,
             recurrence: recurrence,
+            scheduledDay: scheduledDayValue,
             reminderMode: reminderMode,
             reminderHour: reminderMode == .none ? nil : components.hour,
             reminderMinute: reminderMode == .none ? nil : components.minute
