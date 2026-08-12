@@ -39,7 +39,9 @@ struct CompletionPresentationState: Equatable, Sendable {
         guard latestSubmittedCommandID == command.id else {
             return false
         }
-        undoToken = token?.sourceCommandID == command.id ? token : nil
+        if let token, token.sourceCommandID == command.id {
+            undoToken = token
+        }
         return true
     }
 

@@ -217,6 +217,59 @@ final class MenuBarStateTests: XCTestCase {
         XCTAssertNil(fixture.model.todayTasks.first { $0.id == secondTask.id }?.completedAt)
     }
 
+    func testSamePresentationRestoresPriorUndoAfterFullyFailedCompletion() async throws {
+        let fixture = makeTwoTaskFixture()
+        try fixture.model.reload()
+        let firstTask = try XCTUnwrap(fixture.model.todayTasks.first)
+        let secondTask = try XCTUnwrap(fixture.model.todayTasks.last)
+        var presentation = CompletionPresentationState()
+
+        let firstCommand = fixture.model.enqueueCompletion(firstTask, completed: true)
+        presentation.submit(firstCommand)
+        let firstValue = await firstCommand.value
+        let firstToken = try XCTUnwrap(firstValue)
+        XCTAssertTrue(presentation.complete(firstCommand, token: firstToken))
+        XCTAssertEqual(presentation.visibleUndoToken(using: fixture.model), firstToken)
+
+        fixture.repository.failNextDailyTaskRead = true
+        let failedCommand = fixture.model.enqueueCompletion(secondTask, completed: true)
+        presentation.submit(failedCommand)
+        XCTAssertNil(presentation.visibleUndoToken(using: fixture.model))
+        let failedToken = await failedCommand.value
+        XCTAssertNil(failedToken)
+        XCTAssertTrue(presentation.complete(failedCommand, token: failedToken))
+
+        XCTAssertEqual(fixture.model.currentUndoToken, firstToken)
+        XCTAssertEqual(presentation.visibleUndoToken(using: fixture.model), firstToken)
+
+        await fixture.model.undo(firstToken)
+        XCTAssertNil(fixture.model.todayTasks.first { $0.id == firstTask.id }?.completedAt)
+    }
+
+    func testSamePresentationPartialSuccessReplacesPriorUndo() async throws {
+        let fixture = makeTwoTaskFixture(secondCompleted: true)
+        try fixture.model.reload()
+        let firstTask = try XCTUnwrap(fixture.model.todayTasks.first)
+        let secondTask = try XCTUnwrap(fixture.model.todayTasks.last)
+        var presentation = CompletionPresentationState()
+
+        let firstCommand = fixture.model.enqueueCompletion(firstTask, completed: true)
+        presentation.submit(firstCommand)
+        let firstValue = await firstCommand.value
+        let firstToken = try XCTUnwrap(firstValue)
+        XCTAssertTrue(presentation.complete(firstCommand, token: firstToken))
+
+        fixture.notifications.shouldFailSync = true
+        let secondCommand = fixture.model.enqueueCompletion(secondTask, completed: false)
+        presentation.submit(secondCommand)
+        let secondValue = await secondCommand.value
+        let secondToken = try XCTUnwrap(secondValue)
+        XCTAssertTrue(presentation.complete(secondCommand, token: secondToken))
+
+        XCTAssertFalse(fixture.model.isUndoAvailable(firstToken))
+        XCTAssertEqual(presentation.visibleUndoToken(using: fixture.model), secondToken)
+    }
+
     func testNotificationPartialSuccessPermanentlyReplacesPriorUndo() async throws {
         let fixture = makeTwoTaskFixture(secondCompleted: true)
         try fixture.model.reload()
