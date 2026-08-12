@@ -173,6 +173,27 @@ final class AppModel {
         reloadAfterSavedMutation()
     }
 
+    func update(_ task: DailyTask, with draft: TaskDraft) async {
+        do {
+            try await taskService.update(
+                templateID: task.templateID,
+                draft: draft,
+                on: today,
+                now: dayProvider.now
+            )
+        } catch {
+            if (error as? TaskServiceError) == .notificationSyncFailed {
+                reloadAfterSavedMutation(
+                    successMessage: "任务已更新，但提醒失败。请重试。"
+                )
+                return
+            }
+            errorMessage = addErrorMessage(for: error)
+            return
+        }
+        reloadAfterSavedMutation()
+    }
+
     func toggle(_ task: DailyTask) async {
         let wasCompleted = task.completedAt != nil
         do {

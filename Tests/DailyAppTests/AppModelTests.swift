@@ -10,6 +10,54 @@ final class AppModelTests: XCTestCase {
     private let day = LocalDay(rawValue: "2026-08-12")
     private let now = Date(timeIntervalSince1970: 1_786_521_600)
 
+    func testMotionSpecsKeepInteractionSemanticsInspectable() {
+        XCTAssertEqual(MotionTokens.pressScale, 0.97)
+        XCTAssertEqual(MotionTokens.standard.duration, 0.36)
+        XCTAssertEqual(MotionTokens.standard.bounce, 0)
+        XCTAssertEqual(MotionTokens.physical.bounce, 0.18)
+        XCTAssertEqual(MotionTokens.reduced.pressScale, 1)
+        XCTAssertEqual(MotionTokens.reduced.hoverLift, 0)
+    }
+
+    func testReorderProjectionClampsDestinationAndMovesNeighborsContinuously() {
+        XCTAssertEqual(
+            ReorderLayout.destinationIndex(
+                startIndex: 0,
+                translation: 99,
+                rowStride: 66,
+                count: 4
+            ),
+            2
+        )
+        XCTAssertEqual(
+            ReorderLayout.destinationIndex(
+                startIndex: 3,
+                translation: 200,
+                rowStride: 66,
+                count: 4
+            ),
+            3
+        )
+        XCTAssertEqual(
+            ReorderLayout.neighborOffset(
+                itemIndex: 1,
+                startIndex: 0,
+                translation: 99,
+                rowStride: 66
+            ),
+            -66
+        )
+        XCTAssertEqual(
+            ReorderLayout.neighborOffset(
+                itemIndex: 2,
+                startIndex: 0,
+                translation: 99,
+                rowStride: 66
+            ),
+            -33
+        )
+    }
+
     func testEmptyTaskListHasZeroCompletionFraction() throws {
         let fixture = makeFixture()
 
@@ -42,6 +90,22 @@ final class AppModelTests: XCTestCase {
         await fixture.model.add(TaskDraft(title: "Write report"))
 
         XCTAssertEqual(fixture.model.todayTasks.map(\.titleSnapshot), ["Write report"])
+        XCTAssertNil(fixture.model.errorMessage)
+    }
+
+    func testUpdateRoutesTaskEditorChangesThroughModelAndReloadsToday() async throws {
+        let template = TaskTemplate(title: "Old title")
+        let task = DailyTask(
+            templateID: template.id,
+            dayKey: day.rawValue,
+            titleSnapshot: template.title
+        )
+        let fixture = makeFixture(templates: [template], tasks: [task])
+        try fixture.model.reload()
+
+        await fixture.model.update(task, with: TaskDraft(title: "New title"))
+
+        XCTAssertEqual(fixture.model.todayTasks.map(\.titleSnapshot), ["New title"])
         XCTAssertNil(fixture.model.errorMessage)
     }
 
