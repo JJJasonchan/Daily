@@ -33,7 +33,7 @@ rm -f "$appcast_dir"/*.dmg
 cp "$dmg_path" "$appcast_dir/"
 
 # Generate appcast with EdDSA signature (key from keychain)
-"$gen_appcast" --ed-key-from-keychain "$appcast_dir"
+"$gen_appcast" "$appcast_dir"
 
 appcast_file="$appcast_dir/appcast.xml"
 if [[ -f "$appcast_file" ]]; then
