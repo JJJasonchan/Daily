@@ -209,6 +209,35 @@ final class TaskServiceTests: XCTestCase {
         XCTAssertEqual(notifications.syncedTaskIDs, [todayTask.id])
     }
 
+    func testUpdateInstanceRejectsTaskWhileItsTemplateStillExists() async throws {
+        let template = TaskTemplate(title: "Pay bill", kind: .once)
+        let task = DailyTask(
+            templateID: template.id,
+            dayKey: day.rawValue,
+            titleSnapshot: template.title
+        )
+        let repository = TestTaskRepository(templates: [template], tasks: [task])
+        let service = TaskService(
+            repository: repository,
+            notifications: RecordingNotificationScheduler()
+        )
+
+        do {
+            try await service.updateInstance(
+                id: task.id,
+                draft: InstanceDraft(title: "Edited snapshot"),
+                now: now
+            )
+            XCTFail("Expected non-orphan instance update to be rejected")
+        } catch let error as TaskServiceError {
+            XCTAssertEqual(error, .instanceStillHasTemplate)
+        }
+
+        XCTAssertEqual(task.titleSnapshot, "Pay bill")
+        XCTAssertEqual(repository.storedTemplates.map(\.id), [template.id])
+        XCTAssertEqual(repository.saveCallCount, 0)
+    }
+
     func testUpdatingRecurringTemplatePreservesOriginalRecurrenceStartDay() async throws {
         let originalStart = LocalDay(rawValue: "2026-07-01")
         let template = TaskTemplate(

@@ -150,6 +150,7 @@ final class AppModel {
 
     private(set) var todayTasks: [DailyTask] = []
     private(set) var templates: [TaskTemplate] = []
+    private(set) var todayTemplatesByID: [UUID: TaskTemplate] = [:]
     private(set) var selectedHistoryDay: LocalDay
     private(set) var errorMessage: String?
     private(set) var lastCompletionUndo: CompletionUndoToken?
@@ -245,9 +246,20 @@ final class AppModel {
         let day = LocalDay(date: dayProvider.now, calendar: dayProvider.calendar)
         let loadedTasks = try taskService.today(on: day)
         let loadedTemplates = try taskService.recurringTemplates()
+        var loadedTodayTemplates: [UUID: TaskTemplate] = [:]
+        for templateID in Set(loadedTasks.map(\.templateID)) {
+            if let template = try repository.template(id: templateID) {
+                loadedTodayTemplates[templateID] = template
+            }
+        }
         todayTasks = loadedTasks
         templates = loadedTemplates
+        todayTemplatesByID = loadedTodayTemplates
         errorMessage = nil
+    }
+
+    func editorTemplate(for task: DailyTask) -> TaskTemplate? {
+        todayTemplatesByID[task.templateID]
     }
 
     func selectHistoryDay(_ day: LocalDay) {
@@ -701,6 +713,8 @@ final class AppModel {
             return "重复任务需要选择重复规则。"
         case .notificationSyncFailed:
             return "任务已保存，但提醒失败。请重试。"
+        case .instanceStillHasTemplate:
+            return "任务仍有关联规则，请使用完整任务编辑。"
         case .taskNotFound, .templateNotFound:
             return "添加任务失败。请重试。"
         }
@@ -716,7 +730,8 @@ final class AppModel {
             return "任务标题不能为空。"
         case .recurrenceRequired:
             return "重复任务需要选择重复规则。"
-        case .taskNotFound, .templateNotFound, .notificationSyncFailed:
+        case .taskNotFound, .templateNotFound, .instanceStillHasTemplate,
+             .notificationSyncFailed:
             return fallback
         }
     }

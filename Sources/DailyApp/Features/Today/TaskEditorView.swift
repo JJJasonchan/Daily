@@ -73,7 +73,7 @@ struct TaskEditorView: View {
         self.template = template
 
         let resolvedTemplate = template ?? task.flatMap { item in
-            model.templates.first { $0.id == item.templateID }
+            model.editorTemplate(for: item)
         }
         mode = TaskEditorMode.resolve(task: task, template: resolvedTemplate)
         let recurrence = resolvedTemplate?.recurrence

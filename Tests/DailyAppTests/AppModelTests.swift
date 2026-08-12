@@ -192,6 +192,13 @@ final class AppModelTests: XCTestCase {
         try fixture.model.reload()
         XCTAssertEqual(fixture.model.deleteTemplate(template), .success)
 
+        let resolvedTemplate = fixture.model.editorTemplate(for: todayTask)
+        XCTAssertNil(resolvedTemplate)
+        XCTAssertEqual(
+            TaskEditorMode.resolve(task: todayTask, template: resolvedTemplate),
+            .orphanInstance
+        )
+
         let result = await fixture.model.updateInstance(
             todayTask,
             with: InstanceDraft(
@@ -409,6 +416,76 @@ final class AppModelTests: XCTestCase {
 
         XCTAssertEqual(fixture.model.todayTasks.map(\.titleSnapshot), ["New title"])
         XCTAssertNil(fixture.model.errorMessage)
+    }
+
+    func testCreatedOneTimeTaskResolvesRealTemplateEditorAndUpdatesTemplateAndInstance() async throws {
+        let fixture = makeFixture()
+        let createResult = await fixture.model.add(TaskDraft(title: "Pay bill"))
+        XCTAssertEqual(createResult, .success)
+        let task = try XCTUnwrap(fixture.model.todayTasks.first)
+
+        let resolvedTemplate = try XCTUnwrap(fixture.model.editorTemplate(for: task))
+        let mode = TaskEditorMode.resolve(task: task, template: resolvedTemplate)
+
+        XCTAssertEqual(mode, .taskWithTemplate)
+        XCTAssertTrue(fixture.model.templates.isEmpty)
+
+        let updateResult = await fixture.model.update(
+            task,
+            with: TaskDraft(title: "Pay rent")
+        )
+        XCTAssertEqual(updateResult, .success)
+        XCTAssertEqual(resolvedTemplate.title, "Pay rent")
+        XCTAssertEqual(fixture.model.todayTasks.first?.titleSnapshot, "Pay rent")
+    }
+
+    func testAppModelRejectsInstanceDraftForNonOrphanWithSpecificError() async throws {
+        let template = TaskTemplate(title: "Pay bill", kind: .once)
+        let task = DailyTask(
+            templateID: template.id,
+            dayKey: day.rawValue,
+            titleSnapshot: template.title
+        )
+        let fixture = makeFixture(templates: [template], tasks: [task])
+        try fixture.model.reload()
+
+        let result = await fixture.model.updateInstance(
+            task,
+            with: InstanceDraft(title: "Snapshot-only edit")
+        )
+
+        XCTAssertEqual(result, .failure)
+        XCTAssertEqual(task.titleSnapshot, "Pay bill")
+        XCTAssertEqual(
+            fixture.model.errorMessage,
+            "任务仍有关联规则，请使用完整任务编辑。"
+        )
+    }
+
+    func testTemplateDeletedAfterEditorResolutionFailsWithoutSnapshotFallback() async throws {
+        let template = TaskTemplate(title: "Pay bill", kind: .once)
+        let task = DailyTask(
+            templateID: template.id,
+            dayKey: day.rawValue,
+            titleSnapshot: template.title
+        )
+        let fixture = makeFixture(templates: [template], tasks: [task])
+        try fixture.model.reload()
+        XCTAssertNotNil(fixture.model.editorTemplate(for: task))
+
+        fixture.repository.storedTemplates.removeAll { $0.id == template.id }
+        let result = await fixture.model.update(
+            task,
+            with: TaskDraft(title: "Must not become a snapshot edit")
+        )
+
+        XCTAssertEqual(result, .failure)
+        XCTAssertEqual(task.titleSnapshot, "Pay bill")
+        XCTAssertTrue(fixture.repository.storedTemplates.isEmpty)
+        XCTAssertEqual(
+            fixture.model.errorMessage,
+            "重复规则已删除，只能编辑今天的任务。"
+        )
     }
 
     func testUpdateReminderPartialSuccessIsDismissableAndWritesOnlyOnce() async throws {

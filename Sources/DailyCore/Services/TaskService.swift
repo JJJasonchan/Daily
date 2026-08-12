@@ -5,6 +5,7 @@ public enum TaskServiceError: Error, Equatable {
     case recurrenceRequired
     case taskNotFound
     case templateNotFound
+    case instanceStillHasTemplate
     case notificationSyncFailed
 }
 
@@ -104,6 +105,9 @@ public final class TaskService {
         let title = try validatedTitle(draft.title)
         guard let task = try repository.dailyTask(id: id) else {
             throw TaskServiceError.taskNotFound
+        }
+        guard try repository.template(id: task.templateID) == nil else {
+            throw TaskServiceError.instanceStillHasTemplate
         }
 
         task.titleSnapshot = title
