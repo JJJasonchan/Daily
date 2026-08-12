@@ -11,6 +11,12 @@ public final class AppSettings {
     public var dailyReminderMinute: Int?
     public var persistentIntervalMinutes: Int
     public var lastProcessedDayKey: String?
+    public var colorSchemeModeRaw: String
+
+    public var colorSchemeMode: ColorSchemeMode {
+        get { ColorSchemeMode(rawValue: colorSchemeModeRaw) ?? .system }
+        set { colorSchemeModeRaw = newValue.rawValue }
+    }
 
     public init(
         id: UUID = AppSettings.singletonID,
@@ -18,7 +24,8 @@ public final class AppSettings {
         dailyReminderHour: Int? = nil,
         dailyReminderMinute: Int? = nil,
         persistentIntervalMinutes: Int = 15,
-        lastProcessedDayKey: String? = nil
+        lastProcessedDayKey: String? = nil,
+        colorSchemeMode: ColorSchemeMode = .system
     ) {
         self.id = id
         self.dailyReminderEnabled = dailyReminderEnabled
@@ -26,5 +33,6 @@ public final class AppSettings {
         self.dailyReminderMinute = dailyReminderMinute
         self.persistentIntervalMinutes = persistentIntervalMinutes
         self.lastProcessedDayKey = lastProcessedDayKey
+        self.colorSchemeModeRaw = colorSchemeMode.rawValue
     }
 }

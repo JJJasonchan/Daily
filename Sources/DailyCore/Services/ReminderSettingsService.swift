@@ -56,4 +56,10 @@ public final class ReminderSettingsService {
         settings.persistentIntervalMinutes = minutes
         try repository.save()
     }
+
+    public func saveColorSchemeMode(_ mode: ColorSchemeMode) throws {
+        let settings = try repository.settings()
+        settings.colorSchemeMode = mode
+        try repository.save()
+    }
 }

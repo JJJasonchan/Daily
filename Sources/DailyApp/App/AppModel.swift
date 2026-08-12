@@ -155,6 +155,7 @@ final class AppModel {
     private(set) var errorMessage: String?
     private(set) var lastCompletionUndo: CompletionUndoToken?
     private(set) var dailyReminderEnabled = false
+    private(set) var colorSchemeMode: ColorSchemeMode = .system
     private(set) var dailyReminderHour = 9
     private(set) var dailyReminderMinute = 0
     private(set) var persistentIntervalMinutes = 15
@@ -771,6 +772,7 @@ final class AppModel {
         dailyReminderHour = settings.dailyReminderHour ?? 9
         dailyReminderMinute = settings.dailyReminderMinute ?? 0
         persistentIntervalMinutes = settings.persistentIntervalMinutes
+        colorSchemeMode = settings.colorSchemeMode
     }
 
     private func applyReminderValues(
@@ -783,6 +785,15 @@ final class AppModel {
         dailyReminderHour = hour ?? dailyReminderHour
         dailyReminderMinute = minute ?? dailyReminderMinute
         self.persistentIntervalMinutes = persistentIntervalMinutes
+    }
+
+    func saveColorSchemeMode(_ mode: ColorSchemeMode) {
+        colorSchemeMode = mode
+        do {
+            try reminderSettingsService.saveColorSchemeMode(mode)
+        } catch {
+            errorMessage = "保存外观设置失败。请重试。"
+        }
     }
 
     private func commandErrorMessage(

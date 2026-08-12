@@ -8,6 +8,7 @@ struct SettingsPresentationState {
     var dailyReminderTime = Date.now
     var persistentIntervalMinutes = 15
     private(set) var isHydrated = false
+    var colorSchemeMode: ColorSchemeMode = .system
 
     mutating func hydrate(
         from model: AppModel,
@@ -15,6 +16,7 @@ struct SettingsPresentationState {
     ) {
         guard !isHydrated else { return }
         dailyReminderEnabled = model.dailyReminderEnabled
+        colorSchemeMode = model.colorSchemeMode
         persistentIntervalMinutes = Self.intervalChoices.contains(
             model.persistentIntervalMinutes
         ) ? model.persistentIntervalMinutes : 15
@@ -38,7 +40,16 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("每日提醒") {
+            Section("🎨 外观") {
+                Picker("颜色模式", selection: $presentation.colorSchemeMode) {
+                    ForEach(ColorSchemeMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            Section("🔔 每日提醒") {
                 Toggle("启用每日提醒", isOn: $presentation.dailyReminderEnabled)
 
                 if presentation.dailyReminderEnabled {
@@ -50,7 +61,7 @@ struct SettingsView: View {
                 }
             }
 
-            Section("持续提醒") {
+            Section("⏰ 持续提醒") {
                 Picker("重复间隔", selection: $presentation.persistentIntervalMinutes) {
                     ForEach(SettingsPresentationState.intervalChoices, id: \.self) { minutes in
                         Text("\(minutes) 分钟").tag(minutes)
@@ -61,7 +72,7 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("通知权限") {
+            Section("🔐 通知权限") {
                 LabeledContent("当前状态", value: authorizationDescription)
 
                 if model.notificationAuthorizationStatus == .notDetermined {
@@ -90,6 +101,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .focusEffectDisabled()
         .frame(maxWidth: 680)
         .padding(.horizontal, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -133,6 +145,7 @@ struct SettingsView: View {
                 minute: presentation.dailyReminderEnabled ? components.minute : nil,
                 persistentIntervalMinutes: presentation.persistentIntervalMinutes
             )
+            model.saveColorSchemeMode(presentation.colorSchemeMode)
             isSaving = false
         }
     }

@@ -3,6 +3,8 @@ import SwiftUI
 
 @MainActor
 private var sharedQuickCapture: QuickCaptureWindow?
+@MainActor
+private var sharedModel: AppModel?
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var globalMonitor: Any?
@@ -14,10 +16,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func ensureMenuBarPanelFollowsSystemAppearance() {
-        // MenuBarExtra creates an NSPanel; set appearance=nil to follow system
+        // MenuBarExtra creates an NSPanel; appearance follows colorSchemeMode
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             for window in NSApp.windows where window is NSPanel {
-                window.appearance = nil
+                window.appearance = NSAppearance.from(colorSchemeMode: sharedModel?.colorSchemeMode ?? .system)
             }
         }
     }
@@ -52,11 +54,13 @@ struct DailyApp: App {
         let model = AppDependencies.live().appModel
         _sceneState = State(initialValue: AppSceneState(model: model))
         sharedQuickCapture = QuickCaptureWindow(model: model)
+        sharedModel = model
     }
 
     var body: some Scene {
         Window("Daily", id: "main") {
             AppShellView(model: sceneState.windowModel)
+                .preferredColorScheme(sceneState.model.colorSchemeMode.swiftUIColorScheme)
                 .focusEffectDisabled()
                 .task {
                     await sceneState.activate()
@@ -79,6 +83,7 @@ struct DailyApp: App {
 
         MenuBarExtra {
             MenuBarContentView(model: sceneState.menuBarModel)
+                .preferredColorScheme(sceneState.model.colorSchemeMode.swiftUIColorScheme)
                 .focusEffectDisabled()
                 .task {
                     await sceneState.activate()
