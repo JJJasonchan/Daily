@@ -51,6 +51,7 @@ struct TodayView: View {
 
     @State private var completionPresentation = CompletionPresentationState()
     @State private var undoDismissalTask: Task<Void, Never>?
+    @State private var pendingFutureDeletion: DailyTask?
 
     private var motion: MotionSpec {
         MotionTokens.resolved(MotionTokens.standard, reduceMotion: reduceMotion)
@@ -70,7 +71,8 @@ struct TodayView: View {
                                 model: model,
                                 isCompleted: effectiveCompletion,
                                 onToggle: toggle,
-                                onEdit: edit
+                                onEdit: edit,
+                                onDelete: requestDelete
                             )
                         }
                     }
@@ -102,6 +104,24 @@ struct TodayView: View {
         }
         .onDisappear {
             undoDismissalTask?.cancel()
+        }
+        .confirmationDialog(
+            "停止以后重复？",
+            isPresented: futureDeletePresentation,
+            titleVisibility: .visible
+        ) {
+            Button("停止以后重复", role: .destructive) {
+                guard let task = pendingFutureDeletion else { return }
+                pendingFutureDeletion = nil
+                Task { @MainActor in
+                    await model.delete(task, scope: .allFuture)
+                }
+            }
+            Button("取消", role: .cancel) {
+                pendingFutureDeletion = nil
+            }
+        } message: {
+            Text("今天的任务将被移除，此规则以后不再生成任务；历史记录不会改变。")
         }
     }
 
@@ -217,6 +237,28 @@ struct TodayView: View {
 
     private func edit(_ task: DailyTask) {
         model.editorTaskID = task.id
+    }
+
+    private func requestDelete(_ task: DailyTask, scope: DeleteScope) {
+        switch scope {
+        case .todayOnly:
+            Task { @MainActor in
+                await model.delete(task, scope: .todayOnly)
+            }
+        case .allFuture:
+            pendingFutureDeletion = task
+        }
+    }
+
+    private var futureDeletePresentation: Binding<Bool> {
+        Binding(
+            get: { pendingFutureDeletion != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingFutureDeletion = nil
+                }
+            }
+        )
     }
 
     private func scheduleUndoDismissal(for token: CompletionUndoToken) {

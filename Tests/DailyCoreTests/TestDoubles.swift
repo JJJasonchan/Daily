@@ -52,6 +52,10 @@ final class TestTaskRepository: TaskRepository {
         storedTasks.append(task)
     }
 
+    func remove(_ template: TaskTemplate) {
+        storedTemplates.removeAll { $0.id == template.id }
+    }
+
     func remove(_ task: DailyTask) {
         storedTasks.removeAll { $0.id == task.id }
     }

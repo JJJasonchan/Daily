@@ -6,6 +6,7 @@ struct TaskEditorView: View {
     @Bindable var model: AppModel
 
     let task: DailyTask?
+    let template: TaskTemplate?
 
     @State private var title: String
     @State private var kind: TaskKind
@@ -16,25 +17,38 @@ struct TaskEditorView: View {
     @State private var isSaving = false
 
     init(model: AppModel, task: DailyTask? = nil) {
+        self.init(model: model, task: task, template: nil)
+    }
+
+    init(model: AppModel, template: TaskTemplate) {
+        self.init(model: model, task: nil, template: template)
+    }
+
+    private init(
+        model: AppModel,
+        task: DailyTask?,
+        template: TaskTemplate?
+    ) {
         self.model = model
         self.task = task
+        self.template = template
 
-        let template = task.flatMap { item in
+        let resolvedTemplate = template ?? task.flatMap { item in
             model.templates.first { $0.id == item.templateID }
         }
-        let recurrence = template?.recurrence
-        let hour = task?.reminderHour ?? template?.reminderHour ?? 9
-        let minute = task?.reminderMinute ?? template?.reminderMinute ?? 0
+        let recurrence = resolvedTemplate?.recurrence
+        let hour = task?.reminderHour ?? resolvedTemplate?.reminderHour ?? 9
+        let minute = task?.reminderMinute ?? resolvedTemplate?.reminderMinute ?? 0
         let time = Calendar.autoupdatingCurrent.date(
             from: DateComponents(hour: hour, minute: minute)
         ) ?? .now
 
-        _title = State(initialValue: task?.titleSnapshot ?? "")
-        _kind = State(initialValue: template?.kind ?? .once)
+        _title = State(initialValue: task?.titleSnapshot ?? resolvedTemplate?.title ?? "")
+        _kind = State(initialValue: resolvedTemplate?.kind ?? .once)
         _recurrenceFrequency = State(initialValue: recurrence?.frequency ?? .daily)
         _selectedWeekdays = State(initialValue: recurrence?.weekdays ?? [])
         _reminderMode = State(
-            initialValue: task?.reminderMode ?? template?.reminderMode ?? .none
+            initialValue: task?.reminderMode ?? resolvedTemplate?.reminderMode ?? .none
         )
         _reminderTime = State(initialValue: time)
     }
@@ -42,7 +56,7 @@ struct TaskEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(task == nil ? "新建任务" : "编辑任务")
+                Text(task == nil && template == nil ? "新建任务" : "编辑任务")
                     .font(.title2.weight(.semibold))
                 Spacer()
                 Button {
@@ -108,7 +122,7 @@ struct TaskEditorView: View {
                 }
                 .keyboardShortcut(.cancelAction)
 
-                Button(task == nil ? "添加" : "保存", action: save)
+                Button(task == nil && template == nil ? "添加" : "保存", action: save)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSave || isSaving)
             }
@@ -166,6 +180,8 @@ struct TaskEditorView: View {
             let result: MutationResult
             if let task {
                 result = await model.update(task, with: draft)
+            } else if let template {
+                result = await model.update(template, with: draft)
             } else {
                 result = await model.add(draft)
             }

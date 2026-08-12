@@ -43,6 +43,7 @@ struct ReorderableTaskList: View {
     let isCompleted: (DailyTask) -> Bool
     let onToggle: (DailyTask) -> Void
     let onEdit: (DailyTask) -> Void
+    let onDelete: (DailyTask, DeleteScope) -> Void
 
     @State private var dragSnapshot: [DailyTask]?
     @State private var activeTaskID: UUID?
@@ -102,6 +103,7 @@ struct ReorderableTaskList: View {
         TaskRow(
             task: task,
             isCompleted: isCompleted(task),
+            isRecurring: model.templates.first { $0.id == task.templateID }?.kind == .recurring,
             isDragSource: isDragSource,
             onToggle: { onToggle(task) },
             onEdit: { onEdit(task) },
@@ -110,7 +112,8 @@ struct ReorderableTaskList: View {
             },
             onDragEnded: { value in
                 dragEnded(value)
-            }
+            },
+            onDelete: { scope in onDelete(task, scope) }
         )
     }
 

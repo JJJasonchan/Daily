@@ -93,14 +93,12 @@ public final class TaskService {
         guard let task = try repository.dailyTask(id: id) else {
             throw TaskServiceError.taskNotFound
         }
-        guard let template = try repository.template(id: task.templateID) else {
-            throw TaskServiceError.templateNotFound
-        }
+        let template = try repository.template(id: task.templateID)
 
         task.completedAt = completed ? date : nil
-        if template.kind == .once {
-            template.isEnabled = !completed
-            template.updatedAt = date
+        if template?.kind == .once {
+            template?.isEnabled = !completed
+            template?.updatedAt = date
         }
         try repository.save()
 
@@ -117,6 +115,29 @@ public final class TaskService {
         }
 
         template.isEnabled = enabled
+        try repository.save()
+    }
+
+    public func reorderTemplates(ids: [UUID]) throws {
+        var templates: [TaskTemplate] = []
+        for id in ids {
+            guard let template = try repository.template(id: id) else {
+                throw TaskServiceError.templateNotFound
+            }
+            templates.append(template)
+        }
+
+        for (index, template) in templates.enumerated() {
+            template.sortIndex = index * 1_000
+        }
+        try repository.save()
+    }
+
+    public func deleteTemplate(id: UUID) throws {
+        guard let template = try repository.template(id: id) else {
+            throw TaskServiceError.templateNotFound
+        }
+        repository.remove(template)
         try repository.save()
     }
 

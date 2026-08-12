@@ -51,6 +51,29 @@ final class SwiftDataTaskRepositoryTests: XCTestCase {
         XCTAssertEqual(templates.map(\.id), [enabled.id])
     }
 
+    func testRemovingTemplateDoesNotRemoveDailyTaskHistory() throws {
+        let container = try makeContainer()
+        let repository = SwiftDataTaskRepository(context: container.mainContext)
+        let template = TaskTemplate(title: "Read", kind: .recurring)
+        let historicalTask = DailyTask(
+            templateID: template.id,
+            dayKey: "2026-08-11",
+            titleSnapshot: template.title
+        )
+        repository.insert(template)
+        repository.insert(historicalTask)
+        try repository.save()
+
+        repository.remove(template)
+        try repository.save()
+
+        XCTAssertTrue(try repository.templates(enabledOnly: false).isEmpty)
+        XCTAssertEqual(
+            try repository.dailyTasks(on: LocalDay(rawValue: "2026-08-11")).map(\.id),
+            [historicalTask.id]
+        )
+    }
+
     private func makeContainer() throws -> ModelContainer {
         let schema = Schema([TaskTemplate.self, DailyTask.self, AppSettings.self])
         let configuration = ModelConfiguration(isStoredInMemoryOnly: true)

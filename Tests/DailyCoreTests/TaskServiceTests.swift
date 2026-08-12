@@ -91,6 +91,84 @@ final class TaskServiceTests: XCTestCase {
         XCTAssertTrue(template.isEnabled)
     }
 
+    func testRecurringTemplateReorderAssignsSparseIndexesWithoutChangingDailyTasks() throws {
+        let first = recurringTemplate(title: "First")
+        first.sortIndex = 100
+        let second = recurringTemplate(title: "Second")
+        second.sortIndex = 200
+        let historicalTask = DailyTask(
+            templateID: first.id,
+            dayKey: "2026-08-11",
+            titleSnapshot: first.title,
+            sortIndex: 700
+        )
+        let repository = TestTaskRepository(
+            templates: [first, second],
+            tasks: [historicalTask]
+        )
+        let service = TaskService(
+            repository: repository,
+            notifications: RecordingNotificationScheduler()
+        )
+
+        try service.reorderTemplates(ids: [second.id, first.id])
+
+        XCTAssertEqual(second.sortIndex, 0)
+        XCTAssertEqual(first.sortIndex, 1_000)
+        XCTAssertEqual(historicalTask.sortIndex, 700)
+    }
+
+    func testDeleteRecurringTemplateKeepsEveryDailyTaskInstance() throws {
+        let template = recurringTemplate(title: "Read")
+        let historicalTask = DailyTask(
+            templateID: template.id,
+            dayKey: "2026-08-11",
+            titleSnapshot: template.title
+        )
+        let todayTask = DailyTask(
+            templateID: template.id,
+            dayKey: day.rawValue,
+            titleSnapshot: template.title
+        )
+        let repository = TestTaskRepository(
+            templates: [template],
+            tasks: [historicalTask, todayTask]
+        )
+        let service = TaskService(
+            repository: repository,
+            notifications: RecordingNotificationScheduler()
+        )
+
+        try service.deleteTemplate(id: template.id)
+
+        XCTAssertTrue(repository.storedTemplates.isEmpty)
+        XCTAssertEqual(repository.storedTasks.map(\.id), [historicalTask.id, todayTask.id])
+    }
+
+    func testDailyTaskFromDeletedRecurringTemplateCanStillBeCompleted() async throws {
+        let template = recurringTemplate(title: "Read")
+        let todayTask = DailyTask(
+            templateID: template.id,
+            dayKey: day.rawValue,
+            titleSnapshot: template.title
+        )
+        let repository = TestTaskRepository(
+            templates: [template],
+            tasks: [todayTask]
+        )
+        let notifications = RecordingNotificationScheduler()
+        let service = TaskService(
+            repository: repository,
+            notifications: notifications
+        )
+
+        try service.deleteTemplate(id: template.id)
+        try await service.setCompleted(id: todayTask.id, completed: true, at: now)
+
+        XCTAssertEqual(todayTask.completedAt, now)
+        XCTAssertEqual(notifications.cancelledTaskIDs, [todayTask.id])
+    }
+
     func testUpdateChangesTemplateAndTodaysIncompleteSnapshot() async throws {
         let template = recurringTemplate(title: "Old", reminderMode: .once, hour: 8, minute: 0)
         let task = DailyTask(

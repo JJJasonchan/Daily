@@ -2,6 +2,7 @@ import AppKit
 import DailyCore
 import Foundation
 import Observation
+import UserNotifications
 
 enum MutationResult: Equatable, Sendable {
     case success
@@ -46,6 +47,18 @@ struct CompletionCommand: Sendable {
 private struct QueuedCompletionCommand {
     let id: UUID
     let targetCompletion: Bool
+}
+
+struct HistoryDaySummary: Identifiable {
+    let day: LocalDay
+    let tasks: [(DailyTask, HistoryStatus)]
+
+    var id: String { day.rawValue }
+    var totalCount: Int { tasks.count }
+    var completedCount: Int { tasks.lazy.filter { $0.1 == .completed }.count }
+    var completionFraction: Double? {
+        tasks.isEmpty ? nil : Double(completedCount) / Double(tasks.count)
+    }
 }
 
 @MainActor
@@ -140,8 +153,14 @@ final class AppModel {
     private(set) var selectedHistoryDay: LocalDay
     private(set) var errorMessage: String?
     private(set) var lastCompletionUndo: CompletionUndoToken?
+    private(set) var dailyReminderEnabled = false
+    private(set) var dailyReminderHour = 9
+    private(set) var dailyReminderMinute = 0
+    private(set) var persistentIntervalMinutes = 15
+    private(set) var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
     var destination: Destination = .today
     var editorTaskID: UUID?
+    var editorTemplateID: UUID?
     var isPresentingNewTask = false
 
     private let taskService: TaskService
@@ -189,6 +208,31 @@ final class AppModel {
         todayTasks.isEmpty ? 0 : Double(completedCount) / Double(todayTasks.count)
     }
 
+    func history(weekContaining day: LocalDay) throws -> [HistoryDaySummary] {
+        let calendar = dayProvider.calendar
+        let startDate = calendar.dateInterval(
+            of: .weekOfYear,
+            for: day.date(in: calendar)
+        )?.start ?? day.date(in: calendar)
+        let weekStart = LocalDay(date: startDate, calendar: calendar)
+        let days = (0..<7).map { weekStart.adding(days: $0, calendar: calendar) }
+        guard let weekEnd = days.last else { return [] }
+        let statusLookupEnd = weekEnd.adding(days: 1, calendar: calendar)
+        let allTasks = try repository.dailyTasks(
+            from: weekStart,
+            through: statusLookupEnd
+        )
+
+        return days.map { historyDay in
+            let tasks = allTasks
+                .filter { $0.dayKey == historyDay.rawValue }
+                .map { task in
+                    (task, rolloverService.historyStatus(for: task, allTasks: allTasks))
+                }
+            return HistoryDaySummary(day: historyDay, tasks: tasks)
+        }
+    }
+
     func start() async {
         startObservingLifecycleIfNeeded()
         let task = requestLifecycleRefresh(expectedGeneration: lifecycleGeneration)
@@ -202,6 +246,10 @@ final class AppModel {
         todayTasks = loadedTasks
         templates = loadedTemplates
         errorMessage = nil
+    }
+
+    func selectHistoryDay(_ day: LocalDay) {
+        selectedHistoryDay = day
     }
 
     @discardableResult
@@ -241,6 +289,148 @@ final class AppModel {
             return .failure
         }
         return reloadAfterSavedMutation() ? .success : .partialSuccess
+    }
+
+    @discardableResult
+    func update(_ template: TaskTemplate, with draft: TaskDraft) async -> MutationResult {
+        do {
+            try await taskService.update(
+                templateID: template.id,
+                draft: draft,
+                on: today,
+                now: dayProvider.now
+            )
+        } catch {
+            if (error as? TaskServiceError) == .notificationSyncFailed {
+                reloadAfterTemplateMutation(
+                    successMessage: "重复规则已更新，但提醒失败。请重试。"
+                )
+                return .partialSuccess
+            }
+            errorMessage = templateMutationErrorMessage(
+                for: error,
+                fallback: "更新重复规则失败。请重试。"
+            )
+            return .failure
+        }
+        return reloadAfterTemplateMutation() ? .success : .partialSuccess
+    }
+
+    @discardableResult
+    func setTemplateEnabled(
+        _ template: TaskTemplate,
+        enabled: Bool
+    ) -> MutationResult {
+        do {
+            try taskService.setTemplateEnabled(id: template.id, enabled: enabled)
+        } catch {
+            errorMessage = "更新重复规则状态失败。请重试。"
+            return .failure
+        }
+        return reloadAfterTemplateMutation() ? .success : .partialSuccess
+    }
+
+    @discardableResult
+    func reorderTemplates(ids: [UUID]) -> MutationResult {
+        do {
+            try taskService.reorderTemplates(ids: ids)
+        } catch {
+            errorMessage = "调整重复规则顺序失败。请重试。"
+            return .failure
+        }
+        return reloadAfterTemplateMutation() ? .success : .partialSuccess
+    }
+
+    @discardableResult
+    func deleteTemplate(_ template: TaskTemplate) -> MutationResult {
+        do {
+            try taskService.deleteTemplate(id: template.id)
+        } catch {
+            errorMessage = "删除重复规则失败。请重试。"
+            return .failure
+        }
+        if editorTemplateID == template.id {
+            editorTemplateID = nil
+        }
+        return reloadAfterTemplateMutation() ? .success : .partialSuccess
+    }
+
+    func loadReminderSettings() async {
+        do {
+            apply(try reminderSettingsService.settings())
+            errorMessage = nil
+        } catch {
+            errorMessage = "读取提醒设置失败。请重试。"
+        }
+        notificationAuthorizationStatus = await notificationService.authorizationStatus()
+    }
+
+    @discardableResult
+    func saveReminderSettings(
+        enabled: Bool,
+        hour: Int?,
+        minute: Int?,
+        persistentIntervalMinutes: Int
+    ) async -> MutationResult {
+        do {
+            try reminderSettingsService.updatePersistentInterval(
+                minutes: persistentIntervalMinutes
+            )
+        } catch {
+            if (error as? ReminderSettingsError) == .invalidInterval {
+                errorMessage = "持续提醒间隔仅支持 5、10、15、30 或 60 分钟。"
+            } else {
+                errorMessage = "保存持续提醒间隔失败。请重试。"
+            }
+            return .failure
+        }
+
+        do {
+            try await reminderSettingsService.updateDailyReminder(
+                enabled: enabled,
+                hour: hour,
+                minute: minute,
+                now: dayProvider.now
+            )
+        } catch {
+            if (error as? ReminderSettingsError) == .notificationSyncFailed {
+                applyReminderValues(
+                    enabled: enabled,
+                    hour: hour,
+                    minute: minute,
+                    persistentIntervalMinutes: persistentIntervalMinutes
+                )
+                errorMessage = "设置已保存，但每日提醒安排失败。请检查通知权限后重试。"
+                return .partialSuccess
+            }
+            if (error as? ReminderSettingsError) == .invalidTime {
+                errorMessage = "持续提醒间隔已保存，但每日提醒时间无效。"
+            } else {
+                errorMessage = "持续提醒间隔已保存，但每日提醒设置保存失败。请重试。"
+            }
+            self.persistentIntervalMinutes = persistentIntervalMinutes
+            return .partialSuccess
+        }
+
+        applyReminderValues(
+            enabled: enabled,
+            hour: hour,
+            minute: minute,
+            persistentIntervalMinutes: persistentIntervalMinutes
+        )
+        errorMessage = nil
+        return .success
+    }
+
+    func requestNotificationAuthorization() async {
+        do {
+            _ = try await notificationService.requestAuthorization()
+            notificationAuthorizationStatus = await notificationService.authorizationStatus()
+            errorMessage = nil
+        } catch {
+            notificationAuthorizationStatus = await notificationService.authorizationStatus()
+            errorMessage = "请求通知权限失败。请重试或在系统设置中调整。"
+        }
     }
 
     @discardableResult
@@ -483,6 +673,40 @@ final class AppModel {
         }
     }
 
+    private func templateMutationErrorMessage(
+        for error: Error,
+        fallback: String
+    ) -> String {
+        guard let serviceError = error as? TaskServiceError else { return fallback }
+        switch serviceError {
+        case .emptyTitle:
+            return "任务标题不能为空。"
+        case .recurrenceRequired:
+            return "重复任务需要选择重复规则。"
+        case .taskNotFound, .templateNotFound, .notificationSyncFailed:
+            return fallback
+        }
+    }
+
+    private func apply(_ settings: AppSettings) {
+        dailyReminderEnabled = settings.dailyReminderEnabled
+        dailyReminderHour = settings.dailyReminderHour ?? 9
+        dailyReminderMinute = settings.dailyReminderMinute ?? 0
+        persistentIntervalMinutes = settings.persistentIntervalMinutes
+    }
+
+    private func applyReminderValues(
+        enabled: Bool,
+        hour: Int?,
+        minute: Int?,
+        persistentIntervalMinutes: Int
+    ) {
+        dailyReminderEnabled = enabled
+        dailyReminderHour = hour ?? dailyReminderHour
+        dailyReminderMinute = minute ?? dailyReminderMinute
+        self.persistentIntervalMinutes = persistentIntervalMinutes
+    }
+
     private func commandErrorMessage(
         for error: Error,
         notificationMessage: String,
@@ -502,6 +726,18 @@ final class AppModel {
             return true
         } catch {
             errorMessage = "任务已保存，但列表刷新失败。请重试。"
+            return false
+        }
+    }
+
+    @discardableResult
+    private func reloadAfterTemplateMutation(successMessage: String? = nil) -> Bool {
+        do {
+            try reload()
+            errorMessage = successMessage
+            return true
+        } catch {
+            errorMessage = "重复规则已保存，但列表刷新失败。请重试。"
             return false
         }
     }

@@ -16,11 +16,13 @@ struct TaskRow: View {
 
     let task: DailyTask
     let isCompleted: Bool
+    let isRecurring: Bool
     let isDragSource: Bool
     let onToggle: () -> Void
     let onEdit: () -> Void
     let onDragChanged: (DragGesture.Value) -> Void
     let onDragEnded: (DragGesture.Value) -> Void
+    let onDelete: (DeleteScope) -> Void
 
     private var motion: MotionSpec {
         MotionTokens.resolved(MotionTokens.standard, reduceMotion: reduceMotion)
@@ -73,6 +75,27 @@ struct TaskRow: View {
                 .gesture(reorderGesture)
                 .accessibilityLabel("拖动以重新排序 \(task.titleSnapshot)")
                 .accessibilityHint("按住后上下拖动")
+
+            Menu {
+                if isRecurring {
+                    Button("仅移除今天", role: .destructive) {
+                        onDelete(.todayOnly)
+                    }
+                    Button("停止以后重复", role: .destructive) {
+                        onDelete(.allFuture)
+                    }
+                } else {
+                    Button("删除任务", role: .destructive) {
+                        onDelete(.todayOnly)
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .frame(width: 24, height: 28)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityLabel("管理 \(task.titleSnapshot)")
         }
         .padding(.horizontal, 14)
         .frame(height: ReorderableTaskList.rowHeight)

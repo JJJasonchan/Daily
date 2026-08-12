@@ -13,7 +13,11 @@ struct AppShellView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .sheet(isPresented: editorPresentation) {
-            TaskEditorView(model: model, task: editingTask)
+            if let editingTemplate {
+                TaskEditorView(model: model, template: editingTemplate)
+            } else {
+                TaskEditorView(model: model, task: editingTask)
+            }
         }
         .alert("Daily", isPresented: errorPresentation) {
             Button("好") {
@@ -30,23 +34,11 @@ struct AppShellView: View {
         case .today:
             TodayView(model: model)
         case .rules:
-            placeholder(
-                "重复规则",
-                systemImage: "repeat",
-                description: "管理每天、工作日或指定星期重复的任务。"
-            )
+            RulesView(model: model)
         case .history:
-            placeholder(
-                "历史记录",
-                systemImage: "clock.arrow.circlepath",
-                description: "查看过去日期的完成与顺延状态。"
-            )
+            HistoryView(model: model)
         case .settings:
-            placeholder(
-                "设置",
-                systemImage: "gearshape",
-                description: "调整提醒和应用行为。"
-            )
+            SettingsView(model: model)
         }
     }
 
@@ -57,13 +49,21 @@ struct AppShellView: View {
         }
     }
 
+    private var editingTemplate: TaskTemplate? {
+        guard let editorTemplateID = model.editorTemplateID else { return nil }
+        return model.templates.first { $0.id == editorTemplateID }
+    }
+
     private var editorPresentation: Binding<Bool> {
         Binding(
-            get: { model.isPresentingNewTask || editingTask != nil },
+            get: {
+                model.isPresentingNewTask || editingTask != nil || editingTemplate != nil
+            },
             set: { isPresented in
                 guard !isPresented else { return }
                 model.isPresentingNewTask = false
                 model.editorTaskID = nil
+                model.editorTemplateID = nil
             }
         )
     }
@@ -79,16 +79,4 @@ struct AppShellView: View {
         )
     }
 
-    private func placeholder(
-        _ title: String,
-        systemImage: String,
-        description: String
-    ) -> some View {
-        ContentUnavailableView(
-            title,
-            systemImage: systemImage,
-            description: Text(description)
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
 }

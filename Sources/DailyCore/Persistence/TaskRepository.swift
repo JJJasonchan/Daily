@@ -9,6 +9,7 @@ public protocol TaskRepository: AnyObject {
     func dailyTask(id: UUID) throws -> DailyTask?
     func insert(_ template: TaskTemplate)
     func insert(_ task: DailyTask)
+    func remove(_ template: TaskTemplate)
     func remove(_ task: DailyTask)
     func settings() throws -> AppSettings
     func save() throws

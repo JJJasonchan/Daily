@@ -62,6 +62,10 @@ public final class SwiftDataTaskRepository: TaskRepository {
         context.insert(task)
     }
 
+    public func remove(_ template: TaskTemplate) {
+        context.delete(template)
+    }
+
     public func remove(_ task: DailyTask) {
         context.delete(task)
     }

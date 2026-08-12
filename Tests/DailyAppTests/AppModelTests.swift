@@ -89,6 +89,142 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(fixture.model.completionFraction, 0.5)
     }
 
+    func testTemplateActionsReloadRulesAndKeepHistoricalInstances() throws {
+        let first = recurringTemplate(title: "First", sortIndex: 0)
+        let second = recurringTemplate(title: "Second", sortIndex: 1_000)
+        let historicalTask = DailyTask(
+            templateID: first.id,
+            dayKey: "2026-08-11",
+            titleSnapshot: first.title
+        )
+        let fixture = makeFixture(
+            templates: [first, second],
+            tasks: [historicalTask]
+        )
+        try fixture.model.reload()
+
+        XCTAssertEqual(fixture.model.setTemplateEnabled(first, enabled: false), .success)
+        XCTAssertFalse(first.isEnabled)
+
+        fixture.model.reorderTemplates(ids: [second.id, first.id])
+        XCTAssertEqual(fixture.model.templates.map(\.id), [second.id, first.id])
+
+        XCTAssertEqual(fixture.model.deleteTemplate(first), .success)
+        XCTAssertEqual(fixture.model.templates.map(\.id), [second.id])
+        XCTAssertEqual(fixture.repository.storedTasks.map(\.id), [historicalTask.id])
+    }
+
+    func testTemplateEditorActionUsesExistingTaskEditorSavePath() async throws {
+        let template = recurringTemplate(title: "Old", sortIndex: 0)
+        let todayTask = DailyTask(
+            templateID: template.id,
+            dayKey: day.rawValue,
+            titleSnapshot: template.title
+        )
+        let fixture = makeFixture(templates: [template], tasks: [todayTask])
+        try fixture.model.reload()
+        let recurrence = RecurrenceRule(
+            frequency: .weekdays,
+            weekdays: [],
+            startDay: day
+        )
+
+        let result = await fixture.model.update(
+            template,
+            with: TaskDraft(
+                title: "New",
+                kind: .recurring,
+                recurrence: recurrence
+            )
+        )
+
+        XCTAssertEqual(result, .success)
+        XCTAssertEqual(template.title, "New")
+        XCTAssertEqual(template.recurrence, recurrence)
+        XCTAssertEqual(fixture.model.todayTasks.first?.titleSnapshot, "New")
+    }
+
+    func testLoadingSettingsReadsPersistedValuesAndActualDeniedPermission() async {
+        let settings = AppSettings(
+            dailyReminderEnabled: true,
+            dailyReminderHour: 8,
+            dailyReminderMinute: 30,
+            persistentIntervalMinutes: 10,
+            lastProcessedDayKey: day.rawValue
+        )
+        let authorization = AppModelNotificationCenterClient(status: .denied)
+        let fixture = makeFixture(
+            settings: settings,
+            authorizationClient: authorization
+        )
+
+        await fixture.model.loadReminderSettings()
+
+        XCTAssertTrue(fixture.model.dailyReminderEnabled)
+        XCTAssertEqual(fixture.model.dailyReminderHour, 8)
+        XCTAssertEqual(fixture.model.dailyReminderMinute, 30)
+        XCTAssertEqual(fixture.model.persistentIntervalMinutes, 10)
+        XCTAssertEqual(fixture.model.notificationAuthorizationStatus, .denied)
+        XCTAssertEqual(authorization.requestCallCount, 0)
+    }
+
+    func testNotificationAuthorizationIsRequestedOnlyByExplicitAction() async {
+        let authorization = AppModelNotificationCenterClient(
+            status: .notDetermined,
+            grantsAuthorization: true
+        )
+        let fixture = makeFixture(authorizationClient: authorization)
+
+        await fixture.model.loadReminderSettings()
+        XCTAssertEqual(authorization.requestCallCount, 0)
+
+        await fixture.model.requestNotificationAuthorization()
+
+        XCTAssertEqual(authorization.requestCallCount, 1)
+        XCTAssertEqual(fixture.model.notificationAuthorizationStatus, .authorized)
+    }
+
+    func testSavingReminderSettingsPersistsEveryFieldAndSchedulesDailyReminder() async {
+        let settings = AppSettings(lastProcessedDayKey: day.rawValue)
+        let fixture = makeFixture(settings: settings)
+
+        let result = await fixture.model.saveReminderSettings(
+            enabled: true,
+            hour: 9,
+            minute: 45,
+            persistentIntervalMinutes: 30
+        )
+
+        XCTAssertEqual(result, .success)
+        XCTAssertTrue(settings.dailyReminderEnabled)
+        XCTAssertEqual(settings.dailyReminderHour, 9)
+        XCTAssertEqual(settings.dailyReminderMinute, 45)
+        XCTAssertEqual(settings.persistentIntervalMinutes, 30)
+        XCTAssertEqual(fixture.notifications.dailyReminderSyncCallCount, 1)
+        XCTAssertNil(fixture.model.errorMessage)
+    }
+
+    func testReminderSchedulingFailureReportsPersistedPartialSuccessAccurately() async {
+        let settings = AppSettings(lastProcessedDayKey: day.rawValue)
+        let fixture = makeFixture(settings: settings)
+        fixture.notifications.shouldFailSync = true
+
+        let result = await fixture.model.saveReminderSettings(
+            enabled: true,
+            hour: 9,
+            minute: 45,
+            persistentIntervalMinutes: 60
+        )
+
+        XCTAssertEqual(result, .partialSuccess)
+        XCTAssertTrue(settings.dailyReminderEnabled)
+        XCTAssertEqual(settings.persistentIntervalMinutes, 60)
+        XCTAssertEqual(
+            fixture.model.errorMessage,
+            "设置已保存，但每日提醒安排失败。请检查通知权限后重试。"
+        )
+    }
+
     func testAddReloadsTodayState() async {
         let fixture = makeFixture()
 
@@ -656,7 +792,9 @@ final class AppModelTests: XCTestCase {
     private func makeFixture(
         templates: [TaskTemplate] = [],
         tasks: [DailyTask] = [],
-        lastProcessedDay: String? = "2026-08-12"
+        lastProcessedDay: String? = "2026-08-12",
+        settings: AppSettings? = nil,
+        authorizationClient: AppModelNotificationCenterClient? = nil
     ) -> AppModelFixture {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -664,7 +802,7 @@ final class AppModelTests: XCTestCase {
         let repository = AppModelTestRepository(
             templates: templates,
             tasks: tasks,
-            settings: AppSettings(lastProcessedDayKey: lastProcessedDay)
+            settings: settings ?? AppSettings(lastProcessedDayKey: lastProcessedDay)
         )
         let notifications = AppModelNotificationScheduler()
         let taskService = TaskService(repository: repository, notifications: notifications)
@@ -677,7 +815,8 @@ final class AppModelTests: XCTestCase {
             repository: repository,
             notifications: notifications
         )
-        let notificationService = NotificationService(center: AppModelNotificationCenterClient())
+        let client = authorizationClient ?? AppModelNotificationCenterClient()
+        let notificationService = NotificationService(center: client)
         let lifecycle = ManualAppLifecycleObserver()
         let model = AppModel(
             taskService: taskService,
@@ -692,7 +831,24 @@ final class AppModelTests: XCTestCase {
             model: model,
             repository: repository,
             notifications: notifications,
+            authorizationClient: client,
             lifecycle: lifecycle
+        )
+    }
+
+    private func recurringTemplate(
+        title: String,
+        sortIndex: Int
+    ) -> TaskTemplate {
+        TaskTemplate(
+            title: title,
+            kind: .recurring,
+            recurrence: RecurrenceRule(
+                frequency: .daily,
+                weekdays: [],
+                startDay: day
+            ),
+            sortIndex: sortIndex
         )
     }
 }
@@ -702,6 +858,7 @@ private struct AppModelFixture {
     let model: AppModel
     let repository: AppModelTestRepository
     let notifications: AppModelNotificationScheduler
+    let authorizationClient: AppModelNotificationCenterClient
     let lifecycle: ManualAppLifecycleObserver
 }
 
@@ -766,6 +923,9 @@ private final class AppModelTestRepository: TaskRepository {
 
     func insert(_ template: TaskTemplate) { storedTemplates.append(template) }
     func insert(_ task: DailyTask) { storedTasks.append(task) }
+    func remove(_ template: TaskTemplate) {
+        storedTemplates.removeAll { $0.id == template.id }
+    }
     func remove(_ task: DailyTask) { storedTasks.removeAll { $0.id == task.id } }
     func settings() throws -> AppSettings {
         if shouldFailSettings { throw Failure.read }
@@ -793,6 +953,7 @@ private final class AppModelNotificationScheduler: NotificationScheduling {
     private var blockedCancelStartWaiter: CheckedContinuation<Void, Never>?
     private var hasBlockedCancel = false
     private(set) var rebuildCallCount = 0
+    private(set) var dailyReminderSyncCallCount = 0
     private(set) var maximumConcurrentRebuildCount = 0
     private var activeRebuildCount = 0
     private var shouldBlockNextRebuild = false
@@ -831,6 +992,7 @@ private final class AppModelNotificationScheduler: NotificationScheduling {
     }
 
     func syncDailyReminder(settings: AppSettings, now: Date) async throws {
+        dailyReminderSyncCallCount += 1
         if shouldFailSync { throw Failure.sync }
     }
 
@@ -886,8 +1048,25 @@ private final class AppModelNotificationScheduler: NotificationScheduling {
 
 @MainActor
 private final class AppModelNotificationCenterClient: NotificationCenterClient {
-    func authorizationStatus() async -> UNAuthorizationStatus { .notDetermined }
-    func requestAuthorization() async throws -> Bool { true }
+    private(set) var status: UNAuthorizationStatus
+    private let grantsAuthorization: Bool
+    private(set) var requestCallCount = 0
+
+    init(
+        status: UNAuthorizationStatus = .notDetermined,
+        grantsAuthorization: Bool = true
+    ) {
+        self.status = status
+        self.grantsAuthorization = grantsAuthorization
+    }
+
+    func authorizationStatus() async -> UNAuthorizationStatus { status }
+
+    func requestAuthorization() async throws -> Bool {
+        requestCallCount += 1
+        status = grantsAuthorization ? .authorized : .denied
+        return grantsAuthorization
+    }
     func add(_ request: UNNotificationRequest) async throws {}
     func removePending(ids: [String]) {}
     func pendingRequests() async -> [UNNotificationRequest] { [] }
