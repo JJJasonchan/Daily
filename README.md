@@ -5,7 +5,7 @@ Daily 是一款原生、离线的 macOS 每日任务与提醒应用。它使用�
 ## 环境要求
 
 - macOS 26 或更高版本
-- Xcode 26.6（包含 Swift 6.2 工具链）
+- Xcode 26.6；项目清单使用 Swift tools 6.2。本机验证使用 Swift 6.3.3 编译器。
 
 ## 测试
 
@@ -28,6 +28,8 @@ open build/Daily.app
 ```
 
 首次启用提醒时，macOS 可能请求通知权限。拒绝权限不会影响任务管理功能，可在应用“设置”中查看当前授权状态并打开系统设置。
+
+数据保存在 `~/Library/Application Support/com.daily.todo/Daily.store`。早期 SwiftPM 开发构建可能生成的 `default.store` 不会自动导入；当前应用尚未发布，因此不执行可能损坏开发数据的自动迁移。
 
 ## 手动验收
 

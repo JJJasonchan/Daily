@@ -1,8 +1,45 @@
 import DailyCore
 import SwiftUI
 
+enum RuleReorderCoordinator {
+    static func reordered(
+        ids: [UUID],
+        moving sourceID: UUID,
+        before targetID: UUID
+    ) -> [UUID]? {
+        guard sourceID != targetID,
+              let sourceIndex = ids.firstIndex(of: sourceID),
+              let targetIndex = ids.firstIndex(of: targetID) else {
+            return nil
+        }
+        var result = ids
+        let source = result.remove(at: sourceIndex)
+        result.insert(source, at: min(targetIndex, result.count))
+        return result == ids ? nil : result
+    }
+
+    static func reordered(
+        ids: [UUID],
+        moving sourceID: UUID,
+        offset: Int
+    ) -> [UUID]? {
+        guard let sourceIndex = ids.firstIndex(of: sourceID) else { return nil }
+        let destination = sourceIndex + offset
+        guard ids.indices.contains(destination) else { return nil }
+        var result = ids
+        result.swapAt(sourceIndex, destination)
+        return result
+    }
+}
+
 struct RulesView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var model: AppModel
+    @State private var dropTargetID: UUID?
+
+    private var motion: MotionSpec {
+        MotionTokens.resolved(MotionTokens.standard, reduceMotion: reduceMotion)
+    }
 
     var body: some View {
         Group {
@@ -18,7 +55,6 @@ struct RulesView: View {
                         ForEach(model.templates) { template in
                             ruleRow(template)
                         }
-                        .onMove(perform: move)
                     }
                 }
                 .listStyle(.inset)
@@ -31,7 +67,29 @@ struct RulesView: View {
         HStack(spacing: 12) {
             Image(systemName: "line.3.horizontal")
                 .foregroundStyle(.tertiary)
-                .accessibilityHidden(true)
+                .frame(width: 30, height: 38)
+                .contentShape(Rectangle())
+                .draggable(template.id.uuidString)
+                .accessibilityLabel("拖动以重新排序 \(template.title)")
+
+            VStack(spacing: 2) {
+                Button {
+                    _ = applyReorder(moving: template.id, offset: -1)
+                } label: {
+                    Image(systemName: "chevron.up")
+                }
+                .disabled(model.templates.first?.id == template.id)
+                .accessibilityLabel("上移 \(template.title)")
+
+                Button {
+                    _ = applyReorder(moving: template.id, offset: 1)
+                } label: {
+                    Image(systemName: "chevron.down")
+                }
+                .disabled(model.templates.last?.id == template.id)
+                .accessibilityLabel("下移 \(template.title)")
+            }
+            .buttonStyle(.borderless)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(template.title)
@@ -76,13 +134,45 @@ struct RulesView: View {
         }
         .padding(.vertical, 5)
         .opacity(template.isEnabled ? 1 : 0.72)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.primary.opacity(dropTargetID == template.id ? 0.08 : 0))
+        )
+        .animation(motion.animation, value: dropTargetID)
+        .dropDestination(for: String.self) { values, _ in
+            guard let value = values.first,
+                  let sourceID = UUID(uuidString: value) else {
+                return false
+            }
+            return applyReorder(moving: sourceID, before: template.id)
+        } isTargeted: { isTargeted in
+            dropTargetID = isTargeted ? template.id : nil
+        }
         .accessibilityElement(children: .contain)
+        .accessibilityAction(named: "上移") {
+            _ = applyReorder(moving: template.id, offset: -1)
+        }
+        .accessibilityAction(named: "下移") {
+            _ = applyReorder(moving: template.id, offset: 1)
+        }
     }
 
-    private func move(from source: IndexSet, to destination: Int) {
-        var reordered = model.templates
-        reordered.move(fromOffsets: source, toOffset: destination)
-        _ = model.reorderTemplates(ids: reordered.map(\.id))
+    private func applyReorder(moving sourceID: UUID, before targetID: UUID) -> Bool {
+        guard let reordered = RuleReorderCoordinator.reordered(
+            ids: model.templates.map(\.id),
+            moving: sourceID,
+            before: targetID
+        ) else { return false }
+        return model.reorderTemplates(ids: reordered) != .failure
+    }
+
+    private func applyReorder(moving sourceID: UUID, offset: Int) -> Bool {
+        guard let reordered = RuleReorderCoordinator.reordered(
+            ids: model.templates.map(\.id),
+            moving: sourceID,
+            offset: offset
+        ) else { return false }
+        return model.reorderTemplates(ids: reordered) != .failure
     }
 
     private func recurrenceDescription(_ recurrence: RecurrenceRule?) -> String {

@@ -7,6 +7,42 @@ struct SystemDayProvider: DayProviding {
     var calendar: Calendar { .autoupdatingCurrent }
 }
 
+struct StoreLocationResolver {
+    let bundleIdentifier: String
+    let applicationSupportRoot: URL
+
+    var directoryURL: URL {
+        applicationSupportRoot.appending(
+            path: bundleIdentifier,
+            directoryHint: .isDirectory
+        )
+    }
+
+    var storeURL: URL {
+        directoryURL.appending(path: "Daily.store", directoryHint: .notDirectory)
+    }
+
+    func prepareDirectory(fileManager: FileManager) throws {
+        try fileManager.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: true
+        )
+    }
+
+    static func live(fileManager: FileManager = .default) throws -> StoreLocationResolver {
+        guard let root = fileManager.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        return StoreLocationResolver(
+            bundleIdentifier: "com.daily.todo",
+            applicationSupportRoot: root
+        )
+    }
+}
+
 @MainActor
 final class AppDependencies {
     let modelContainer: ModelContainer
@@ -37,10 +73,14 @@ final class AppDependencies {
 
     static func live() -> AppDependencies {
         do {
+            let storeLocation = try StoreLocationResolver.live()
+            try storeLocation.prepareDirectory(fileManager: .default)
+            let configuration = ModelConfiguration(url: storeLocation.storeURL)
             let modelContainer = try ModelContainer(
                 for: TaskTemplate.self,
                 DailyTask.self,
-                AppSettings.self
+                AppSettings.self,
+                configurations: configuration
             )
             let repository = SwiftDataTaskRepository(context: modelContainer.mainContext)
             let dayProvider = SystemDayProvider()
