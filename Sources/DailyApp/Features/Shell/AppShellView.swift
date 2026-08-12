@@ -11,6 +11,7 @@ struct AppShellView: View {
             detail
                 .background(.ultraThinMaterial)
         }
+        .background(.clear)
         .preferredColorScheme(model.colorSchemeMode.swiftUIColorScheme)
         .navigationSplitViewStyle(.balanced)
         .focusEffectDisabled()
