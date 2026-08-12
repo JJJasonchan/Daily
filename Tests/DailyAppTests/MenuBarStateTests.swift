@@ -73,12 +73,123 @@ final class MenuBarStateTests: XCTestCase {
         XCTAssertEqual(fixture.notifications.rebuildCallCount, 2)
     }
 
-    private func makeFixture() -> MenuBarFixture {
+    func testSharedModelPublishesOptimisticCompletionBeforeNotificationFinishes() async throws {
+        let template = TaskTemplate(title: "等待同步")
+        let task = DailyTask(
+            templateID: template.id,
+            dayKey: "2026-08-12",
+            titleSnapshot: template.title
+        )
+        let fixture = makeFixture(templates: [template], tasks: [task])
+        try fixture.model.reload()
+        let sceneState = AppSceneState(model: fixture.model)
+        fixture.notifications.blockNextCancel()
+
+        let command = sceneState.menuBarModel.enqueueCompletion(task, completed: true)
+        await fixture.notifications.waitUntilCancelIsBlocked()
+
+        XCTAssertEqual(sceneState.windowModel.pendingCompletionTarget(taskID: task.id), true)
+        XCTAssertEqual(sceneState.menuBarModel.pendingCompletionTarget(taskID: task.id), true)
+        XCTAssertNotNil(sceneState.windowModel.todayTasks.first?.completedAt)
+
+        fixture.notifications.resumeBlockedCancel()
+        _ = await command.value
+    }
+
+    func testMenuBarCompletionPublishesUndoAndUndoRestoresTaskAndReminder() async throws {
+        let template = TaskTemplate(
+            title: "喝水",
+            reminderMode: .once,
+            reminderHour: 11,
+            reminderMinute: 0
+        )
+        let task = DailyTask(
+            templateID: template.id,
+            dayKey: "2026-08-12",
+            titleSnapshot: template.title,
+            reminderMode: .once,
+            reminderHour: 11,
+            reminderMinute: 0
+        )
+        let fixture = makeFixture(templates: [template], tasks: [task])
+        try fixture.model.reload()
+        var presentation = CompletionPresentationState()
+        let command = fixture.model.enqueueCompletion(task, completed: true)
+        presentation.submit(command)
+
+        let commandToken = await command.value
+        let token = try XCTUnwrap(commandToken)
+        XCTAssertTrue(presentation.complete(command, token: token))
+        XCTAssertEqual(presentation.undoToken, token)
+
+        await MenuBarActions(model: fixture.model).undo(token)
+
+        XCTAssertNil(fixture.model.todayTasks.first?.completedAt)
+        XCTAssertEqual(fixture.notifications.syncedTaskIDs, [task.id])
+        XCTAssertNil(fixture.model.lastCompletionUndo)
+    }
+
+    func testOlderDifferentTaskCompletionCannotOverwriteLatestVisibleUndo() {
+        let firstTaskID = UUID()
+        let secondTaskID = UUID()
+        let firstCommandID = UUID()
+        let secondCommandID = UUID()
+        let firstCommand = completionCommand(id: firstCommandID, taskID: firstTaskID)
+        let secondCommand = completionCommand(id: secondCommandID, taskID: secondTaskID)
+        var presentation = CompletionPresentationState()
+        presentation.submit(firstCommand)
+        presentation.submit(secondCommand)
+        let secondToken = CompletionUndoToken(
+            id: UUID(),
+            sourceCommandID: secondCommandID,
+            taskID: secondTaskID,
+            wasCompleted: false
+        )
+        let firstToken = CompletionUndoToken(
+            id: UUID(),
+            sourceCommandID: firstCommandID,
+            taskID: firstTaskID,
+            wasCompleted: false
+        )
+
+        XCTAssertTrue(presentation.complete(secondCommand, token: secondToken))
+        XCTAssertFalse(presentation.complete(firstCommand, token: firstToken))
+        XCTAssertEqual(presentation.undoToken, secondToken)
+
+        let otherSurfaceToken = CompletionUndoToken(
+            id: UUID(),
+            sourceCommandID: UUID(),
+            taskID: UUID(),
+            wasCompleted: false
+        )
+        XCTAssertNil(
+            presentation.visibleUndoToken(currentModelToken: otherSurfaceToken)
+        )
+    }
+
+    private func completionCommand(
+        id: UUID,
+        taskID: UUID
+    ) -> CompletionCommand {
+        CompletionCommand(
+            id: id,
+            taskID: taskID,
+            targetCompletion: true,
+            result: Task { nil }
+        )
+    }
+
+    private func makeFixture(
+        templates: [TaskTemplate] = [],
+        tasks: [DailyTask] = []
+    ) -> MenuBarFixture {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let now = Date(timeIntervalSince1970: 1_786_521_600)
         let provider = MenuBarDayProvider(now: now, calendar: calendar)
         let repository = MenuBarRepository(
+            templates: templates,
+            tasks: tasks,
             settings: AppSettings(lastProcessedDayKey: "2026-08-12")
         )
         let notifications = MenuBarNotificationScheduler()
@@ -125,11 +236,17 @@ private struct MenuBarDayProvider: DayProviding {
 
 @MainActor
 private final class MenuBarRepository: TaskRepository {
-    private var templates: [TaskTemplate] = []
-    private var tasks: [DailyTask] = []
+    private var templates: [TaskTemplate]
+    private var tasks: [DailyTask]
     private let storedSettings: AppSettings
 
-    init(settings: AppSettings) {
+    init(
+        templates: [TaskTemplate],
+        tasks: [DailyTask],
+        settings: AppSettings
+    ) {
+        self.templates = templates
+        self.tasks = tasks
         storedSettings = settings
     }
 
@@ -166,12 +283,44 @@ private final class MenuBarRepository: TaskRepository {
 @MainActor
 private final class MenuBarNotificationScheduler: NotificationScheduling {
     private(set) var rebuildCallCount = 0
+    private(set) var syncedTaskIDs: [UUID] = []
+    private var shouldBlockNextCancel = false
+    private var blockedCancelContinuation: CheckedContinuation<Void, Never>?
+    private var blockedCancelWaiter: CheckedContinuation<Void, Never>?
+    private var cancelIsBlocked = false
 
-    func sync(task: DailyTask, persistentIntervalMinutes: Int, now: Date) async throws {}
-    func cancel(taskID: UUID) async {}
+    func sync(task: DailyTask, persistentIntervalMinutes: Int, now: Date) async throws {
+        syncedTaskIDs.append(task.id)
+    }
+    func cancel(taskID: UUID) async {
+        guard shouldBlockNextCancel else { return }
+        shouldBlockNextCancel = false
+        cancelIsBlocked = true
+        blockedCancelWaiter?.resume()
+        blockedCancelWaiter = nil
+        await withCheckedContinuation { continuation in
+            blockedCancelContinuation = continuation
+        }
+    }
     func syncDailyReminder(settings: AppSettings, now: Date) async throws {}
     func rebuild(tasks: [DailyTask], settings: AppSettings, now: Date) async throws {
         rebuildCallCount += 1
+    }
+
+    func blockNextCancel() {
+        shouldBlockNextCancel = true
+    }
+
+    func waitUntilCancelIsBlocked() async {
+        if cancelIsBlocked { return }
+        await withCheckedContinuation { continuation in
+            blockedCancelWaiter = continuation
+        }
+    }
+
+    func resumeBlockedCancel() {
+        blockedCancelContinuation?.resume()
+        blockedCancelContinuation = nil
     }
 }
 

@@ -524,6 +524,10 @@ final class AppModel {
         )
     }
 
+    func pendingCompletionTarget(taskID: UUID) -> Bool? {
+        queuedCompletionCommands[taskID]?.targetCompletion
+    }
+
     private func performSetCompletion(
         commandID: UUID,
         taskID: UUID,

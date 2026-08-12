@@ -9,6 +9,10 @@ struct MenuBarActions {
     func quickAdd(title: String) async -> MutationResult {
         await model.add(TaskDraft(title: title))
     }
+
+    func undo(_ token: CompletionUndoToken) async {
+        await model.undo(token)
+    }
 }
 
 struct MenuBarStatusLabel: View {
@@ -33,6 +37,8 @@ struct MenuBarContentView: View {
     @State private var completionPresentation = CompletionPresentationState()
     @State private var quickAddTitle = ""
     @State private var isAdding = false
+    @State private var isUndoing = false
+    @State private var undoDismissalTask: Task<Void, Never>?
 
     private var motion: MotionSpec {
         MotionTokens.resolved(MotionTokens.standard, reduceMotion: reduceMotion)
@@ -60,6 +66,11 @@ struct MenuBarContentView: View {
 
             quickAdd
 
+            if let undoToken = visibleUndoToken {
+                undoBar(for: undoToken)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            }
+
             if let errorMessage = model.errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.triangle")
                     .font(.caption)
@@ -82,6 +93,9 @@ struct MenuBarContentView: View {
         }
         .padding(14)
         .frame(width: 360)
+        .onDisappear {
+            undoDismissalTask?.cancel()
+        }
     }
 
     private var progressHeader: some View {
@@ -180,6 +194,12 @@ struct MenuBarContentView: View {
         quickAddTitle.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var visibleUndoToken: CompletionUndoToken? {
+        completionPresentation.visibleUndoToken(
+            currentModelToken: model.lastCompletionUndo
+        )
+    }
+
     private var effectiveCompletedCount: Int {
         model.todayTasks.reduce(into: 0) { count, task in
             if effectiveCompletion(task) {
@@ -194,7 +214,8 @@ struct MenuBarContentView: View {
     }
 
     private func effectiveCompletion(_ task: DailyTask) -> Bool {
-        completionPresentation.targetCompletion(taskID: task.id)
+        model.pendingCompletionTarget(taskID: task.id)
+            ?? completionPresentation.targetCompletion(taskID: task.id)
             ?? (task.completedAt != nil)
     }
 
@@ -208,8 +229,62 @@ struct MenuBarContentView: View {
         }
         Task { @MainActor in
             let token = await command.value
+            let didPublishToken: Bool = withAnimation(motion.animation) {
+                completionPresentation.complete(command, token: token)
+            }
+            if let token, didPublishToken,
+               completionPresentation.undoToken == token {
+                scheduleUndoDismissal(for: token)
+            }
+        }
+    }
+
+    private func undoBar(for token: CompletionUndoToken) -> some View {
+        HStack(spacing: 10) {
+            Text("任务状态已更新")
+                .font(.subheadline.weight(.medium))
+            Spacer()
+            if isUndoing {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("正在撤销")
+            }
+            Button("撤销") {
+                undo(token)
+            }
+            .buttonStyle(.borderless)
+            .disabled(isUndoing)
+        }
+        .padding(.horizontal, 13)
+        .frame(height: 42)
+        .glassModule(interactive: !isUndoing, cornerRadius: 13)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(isUndoing ? "正在撤销任务状态" : "任务状态已更新，可撤销")
+    }
+
+    private func scheduleUndoDismissal(for token: CompletionUndoToken) {
+        undoDismissalTask?.cancel()
+        undoDismissalTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled,
+                  !isUndoing,
+                  visibleUndoToken == token else { return }
             withAnimation(motion.animation) {
-                _ = completionPresentation.complete(command, token: token)
+                _ = completionPresentation.dismissUndo(token)
+            }
+        }
+    }
+
+    private func undo(_ token: CompletionUndoToken) {
+        guard !isUndoing, visibleUndoToken == token else { return }
+        undoDismissalTask?.cancel()
+        isUndoing = true
+        Task { @MainActor in
+            await MenuBarActions(model: model).undo(token)
+            isUndoing = false
+            guard model.lastCompletionUndo != token else { return }
+            withAnimation(motion.animation) {
+                _ = completionPresentation.dismissUndo(token)
             }
         }
     }

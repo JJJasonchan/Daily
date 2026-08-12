@@ -8,9 +8,11 @@ struct PendingCompletionPresentation: Equatable, Sendable {
 
 struct CompletionPresentationState: Equatable, Sendable {
     private var pendingByTaskID: [UUID: PendingCompletionPresentation] = [:]
+    private var latestSubmittedCommandID: UUID?
     private(set) var undoToken: CompletionUndoToken?
 
     mutating func submit(_ command: CompletionCommand) {
+        latestSubmittedCommandID = command.id
         pendingByTaskID[command.taskID] = PendingCompletionPresentation(
             commandID: command.id,
             targetCompletion: command.targetCompletion
@@ -34,6 +36,9 @@ struct CompletionPresentationState: Equatable, Sendable {
             return false
         }
         pendingByTaskID[command.taskID] = nil
+        guard latestSubmittedCommandID == command.id else {
+            return false
+        }
         undoToken = token?.sourceCommandID == command.id ? token : nil
         return true
     }
@@ -42,6 +47,13 @@ struct CompletionPresentationState: Equatable, Sendable {
         guard undoToken == token else { return false }
         undoToken = nil
         return true
+    }
+
+    func visibleUndoToken(
+        currentModelToken: CompletionUndoToken?
+    ) -> CompletionUndoToken? {
+        guard undoToken == currentModelToken else { return nil }
+        return undoToken
     }
 }
 
@@ -211,7 +223,8 @@ struct TodayView: View {
     }
 
     private func effectiveCompletion(_ task: DailyTask) -> Bool {
-        completionPresentation.targetCompletion(taskID: task.id)
+        model.pendingCompletionTarget(taskID: task.id)
+            ?? completionPresentation.targetCompletion(taskID: task.id)
             ?? (task.completedAt != nil)
     }
 
