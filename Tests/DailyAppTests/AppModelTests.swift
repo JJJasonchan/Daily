@@ -192,11 +192,10 @@ final class AppModelTests: XCTestCase {
         try fixture.model.reload()
         XCTAssertEqual(fixture.model.deleteTemplate(template), .success)
 
-        let result = await fixture.model.update(
+        let result = await fixture.model.updateInstance(
             todayTask,
-            with: TaskDraft(
+            with: InstanceDraft(
                 title: "Edited today",
-                kind: .once,
                 reminderMode: .once,
                 reminderHour: 11,
                 reminderMinute: 5
@@ -210,6 +209,25 @@ final class AppModelTests: XCTestCase {
 
         _ = await fixture.model.toggle(todayTask)
         XCTAssertNotNil(fixture.model.todayTasks.first?.completedAt)
+    }
+
+    func testOrphanInstanceEditorModeExposesOnlyTodaySnapshotFields() {
+        let orphanTask = DailyTask(
+            templateID: UUID(),
+            dayKey: day.rawValue,
+            titleSnapshot: "Orphan"
+        )
+        let orphanMode = TaskEditorMode.resolve(task: orphanTask, template: nil)
+
+        XCTAssertEqual(orphanMode.title, "仅编辑今天的任务")
+        XCTAssertFalse(orphanMode.showsTaskType)
+        XCTAssertFalse(orphanMode.showsRecurrence)
+
+        let template = recurringTemplate(title: "Read", sortIndex: 0)
+        let normalMode = TaskEditorMode.resolve(task: orphanTask, template: template)
+        XCTAssertEqual(normalMode.title, "编辑任务")
+        XCTAssertTrue(normalMode.showsTaskType)
+        XCTAssertTrue(normalMode.showsRecurrence)
     }
 
     func testSettingsPresentationEditsSurviveDelayedPermissionRefresh() async {

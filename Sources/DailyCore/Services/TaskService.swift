@@ -100,8 +100,8 @@ public final class TaskService {
         }
     }
 
-    public func updateInstance(id: UUID, draft: TaskDraft, now: Date) async throws {
-        let title = try validatedTitle(for: draft)
+    public func updateInstance(id: UUID, draft: InstanceDraft, now: Date) async throws {
+        let title = try validatedTitle(draft.title)
         guard let task = try repository.dailyTask(id: id) else {
             throw TaskServiceError.taskNotFound
         }
@@ -203,12 +203,17 @@ public final class TaskService {
     }
 
     private func validatedTitle(for draft: TaskDraft) throws -> String {
-        let title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty else {
-            throw TaskServiceError.emptyTitle
-        }
+        let title = try validatedTitle(draft.title)
         guard draft.kind != .recurring || draft.recurrence != nil else {
             throw TaskServiceError.recurrenceRequired
+        }
+        return title
+    }
+
+    private func validatedTitle(_ proposedTitle: String) throws -> String {
+        let title = proposedTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else {
+            throw TaskServiceError.emptyTitle
         }
         return title
     }

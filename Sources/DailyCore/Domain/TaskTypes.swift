@@ -82,3 +82,22 @@ public struct TaskDraft: Sendable {
         self.reminderMinute = reminderMinute
     }
 }
+
+public struct InstanceDraft: Sendable {
+    public var title: String
+    public var reminderMode: ReminderMode
+    public var reminderHour: Int?
+    public var reminderMinute: Int?
+
+    public init(
+        title: String,
+        reminderMode: ReminderMode = .none,
+        reminderHour: Int? = nil,
+        reminderMinute: Int? = nil
+    ) {
+        self.title = title
+        self.reminderMode = reminderMode
+        self.reminderHour = reminderHour
+        self.reminderMinute = reminderMinute
+    }
+}

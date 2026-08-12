@@ -10,12 +10,41 @@ enum TaskEditorRecurrenceStartDay {
     }
 }
 
+enum TaskEditorMode: Equatable {
+    case newTask
+    case template
+    case taskWithTemplate
+    case orphanInstance
+
+    static func resolve(
+        task: DailyTask?,
+        template: TaskTemplate?
+    ) -> TaskEditorMode {
+        if task != nil {
+            return template == nil ? .orphanInstance : .taskWithTemplate
+        }
+        return template == nil ? .newTask : .template
+    }
+
+    var title: String {
+        switch self {
+        case .newTask: "新建任务"
+        case .template, .taskWithTemplate: "编辑任务"
+        case .orphanInstance: "仅编辑今天的任务"
+        }
+    }
+
+    var showsTaskType: Bool { self != .orphanInstance }
+    var showsRecurrence: Bool { self != .orphanInstance }
+}
+
 struct TaskEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var model: AppModel
 
     let task: DailyTask?
     let template: TaskTemplate?
+    let mode: TaskEditorMode
 
     @State private var title: String
     @State private var kind: TaskKind
@@ -46,6 +75,7 @@ struct TaskEditorView: View {
         let resolvedTemplate = template ?? task.flatMap { item in
             model.templates.first { $0.id == item.templateID }
         }
+        mode = TaskEditorMode.resolve(task: task, template: resolvedTemplate)
         let recurrence = resolvedTemplate?.recurrence
         let hour = task?.reminderHour ?? resolvedTemplate?.reminderHour ?? 9
         let minute = task?.reminderMinute ?? resolvedTemplate?.reminderMinute ?? 0
@@ -72,7 +102,7 @@ struct TaskEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(task == nil && template == nil ? "新建任务" : "编辑任务")
+                Text(mode.title)
                     .font(.title2.weight(.semibold))
                 Spacer()
                 Button {
@@ -91,13 +121,15 @@ struct TaskEditorView: View {
                 TextField("任务标题", text: $title)
                     .accessibilityLabel("任务标题")
 
-                Picker("任务类型", selection: $kind) {
-                    Text("仅今天").tag(TaskKind.once)
-                    Text("重复").tag(TaskKind.recurring)
+                if mode.showsTaskType {
+                    Picker("任务类型", selection: $kind) {
+                        Text("仅今天").tag(TaskKind.once)
+                        Text("重复").tag(TaskKind.recurring)
+                    }
+                    .pickerStyle(.segmented)
                 }
-                .pickerStyle(.segmented)
 
-                if kind == .recurring {
+                if mode.showsRecurrence && kind == .recurring {
                     Section("重复规则") {
                         Picker("频率", selection: $recurrenceFrequency) {
                             Text("每天").tag(RecurrenceFrequency.daily)
@@ -144,7 +176,10 @@ struct TaskEditorView: View {
             }
             .padding(20)
         }
-        .frame(width: 470, height: kind == .recurring ? 560 : 420)
+        .frame(
+            width: 470,
+            height: mode.showsRecurrence && kind == .recurring ? 560 : 420
+        )
         .accessibilityElement(children: .contain)
     }
 
@@ -190,16 +225,17 @@ struct TaskEditorView: View {
         guard canSave, !isSaving else { return }
         isSaving = true
         model.clearError()
-        let draft = makeDraft()
 
         Task { @MainActor in
             let result: MutationResult
-            if let task {
-                result = await model.update(task, with: draft)
+            if let task, mode == .orphanInstance {
+                result = await model.updateInstance(task, with: makeInstanceDraft())
+            } else if let task {
+                result = await model.update(task, with: makeDraft())
             } else if let template {
-                result = await model.update(template, with: draft)
+                result = await model.update(template, with: makeDraft())
             } else {
-                result = await model.add(draft)
+                result = await model.add(makeDraft())
             }
             isSaving = false
             if result.shouldDismissEditor {
@@ -223,6 +259,19 @@ struct TaskEditorView: View {
             title: title,
             kind: kind,
             recurrence: recurrence,
+            reminderMode: reminderMode,
+            reminderHour: reminderMode == .none ? nil : components.hour,
+            reminderMinute: reminderMode == .none ? nil : components.minute
+        )
+    }
+
+    private func makeInstanceDraft() -> InstanceDraft {
+        let components = Calendar.autoupdatingCurrent.dateComponents(
+            [.hour, .minute],
+            from: reminderTime
+        )
+        return InstanceDraft(
+            title: title,
             reminderMode: reminderMode,
             reminderHour: reminderMode == .none ? nil : components.hour,
             reminderMinute: reminderMode == .none ? nil : components.minute

@@ -190,9 +190,8 @@ final class TaskServiceTests: XCTestCase {
 
         try await service.updateInstance(
             id: todayTask.id,
-            draft: TaskDraft(
+            draft: InstanceDraft(
                 title: "  Edited today  ",
-                kind: .once,
                 reminderMode: .persistent,
                 reminderHour: 10,
                 reminderMinute: 20

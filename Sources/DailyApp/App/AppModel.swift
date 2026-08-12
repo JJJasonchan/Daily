@@ -274,24 +274,44 @@ final class AppModel {
     @discardableResult
     func update(_ task: DailyTask, with draft: TaskDraft) async -> MutationResult {
         do {
-            if try repository.template(id: task.templateID) == nil {
-                try await taskService.updateInstance(
-                    id: task.id,
-                    draft: draft,
-                    now: dayProvider.now
-                )
-            } else {
-                try await taskService.update(
-                    templateID: task.templateID,
-                    draft: draft,
-                    on: today,
-                    now: dayProvider.now
-                )
+            guard try repository.template(id: task.templateID) != nil else {
+                errorMessage = "重复规则已删除，只能编辑今天的任务。"
+                return .failure
             }
+            try await taskService.update(
+                templateID: task.templateID,
+                draft: draft,
+                on: today,
+                now: dayProvider.now
+            )
         } catch {
             if (error as? TaskServiceError) == .notificationSyncFailed {
                 reloadAfterSavedMutation(
                     successMessage: "任务已更新，但提醒失败。请重试。"
+                )
+                return .partialSuccess
+            }
+            errorMessage = addErrorMessage(for: error)
+            return .failure
+        }
+        return reloadAfterSavedMutation() ? .success : .partialSuccess
+    }
+
+    @discardableResult
+    func updateInstance(
+        _ task: DailyTask,
+        with draft: InstanceDraft
+    ) async -> MutationResult {
+        do {
+            try await taskService.updateInstance(
+                id: task.id,
+                draft: draft,
+                now: dayProvider.now
+            )
+        } catch {
+            if (error as? TaskServiceError) == .notificationSyncFailed {
+                reloadAfterSavedMutation(
+                    successMessage: "今天的任务已更新，但提醒失败。请重试。"
                 )
                 return .partialSuccess
             }
