@@ -121,8 +121,9 @@ final class DayRolloverServiceTests: XCTestCase {
         XCTAssertEqual(repository.saveCallCount, 3)
     }
 
-    func testRebuildRunsOnceWithOnlyTodaysIncompleteTasks() async throws {
+    func testRebuildRunsOnceWithIncompleteTasksFromTodayForward() async throws {
         let incomplete = DailyTask(templateID: UUID(), dayKey: "2026-08-12", titleSnapshot: "Open")
+        let future = DailyTask(templateID: UUID(), dayKey: "2026-08-15", titleSnapshot: "Planned")
         let completed = DailyTask(
             templateID: UUID(),
             dayKey: "2026-08-12",
@@ -131,7 +132,7 @@ final class DayRolloverServiceTests: XCTestCase {
         )
         let old = DailyTask(templateID: UUID(), dayKey: "2026-08-11", titleSnapshot: "Old")
         let repository = TestTaskRepository(
-            tasks: [incomplete, completed, old],
+            tasks: [incomplete, completed, old, future],
             settings: AppSettings(lastProcessedDayKey: "2026-08-12")
         )
         let notifications = RolloverNotificationScheduler()
@@ -143,7 +144,7 @@ final class DayRolloverServiceTests: XCTestCase {
 
         try await service.processThroughToday()
 
-        XCTAssertEqual(notifications.rebuildTaskIDs, [[incomplete.id]])
+        XCTAssertEqual(notifications.rebuildTaskIDs, [[incomplete.id, future.id]])
     }
 
     func testFirstRunGeneratesOnlyTodaysMatchingRecurringInstance() async throws {

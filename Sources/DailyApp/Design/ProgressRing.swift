@@ -9,8 +9,6 @@ struct ProgressRing: View {
     var completed = 0
     var total = 0
 
-    private let racingRed = Color.red  // system red, semantic color
-
     var body: some View {
         if total <= 0 {
             emptyRing
@@ -58,12 +56,12 @@ struct ProgressRing: View {
                           startAngle: .degrees(180), endAngle: .degrees(360))
                 .stroke(tint.opacity(0.12), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
 
-            // Red filled arc — covers from 180° to the needle position
+            // Filled arc — covers from 180° to the needle position
             if completed > 0 {
                 let endDeg = 180 + (Double(min(completed, displayTotal)) / Double(max(displayTotal, 1))) * 180
                 SemicircleArc(center: center, radius: radius,
                               startAngle: .degrees(180), endAngle: .degrees(endDeg))
-                    .stroke(racingRed, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                    .stroke(tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
             }
 
             // Tick marks — one per task, placed along the arc

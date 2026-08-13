@@ -13,10 +13,16 @@ public enum TaskServiceError: Error, Equatable {
 public final class TaskService {
     private let repository: TaskRepository
     private let notifications: NotificationScheduling
+    private let calendar: Calendar
 
-    public init(repository: TaskRepository, notifications: NotificationScheduling) {
+    public init(
+        repository: TaskRepository,
+        notifications: NotificationScheduling,
+        calendar: Calendar = .autoupdatingCurrent
+    ) {
         self.repository = repository
         self.notifications = notifications
+        self.calendar = calendar
     }
 
     public func today(on day: LocalDay) throws -> [DailyTask] {
@@ -29,7 +35,8 @@ public final class TaskService {
 
     public func create(_ draft: TaskDraft, on day: LocalDay, now: Date) async throws -> DailyTask {
         let title = try validatedTitle(for: draft)
-        let sortIndex = try nextSortIndex(on: day)
+        let instanceDay = firstInstanceDay(for: draft, today: day)
+        let sortIndex = try nextSortIndex(on: instanceDay)
         let template = TaskTemplate(
             title: title,
             kind: draft.kind,
@@ -43,7 +50,7 @@ public final class TaskService {
         )
         let task = DailyTask(
             templateID: template.id,
-            dayKey: day.rawValue,
+            dayKey: instanceDay.rawValue,
             titleSnapshot: title,
             reminderMode: draft.reminderMode,
             reminderHour: draft.reminderHour,
@@ -67,30 +74,26 @@ public final class TaskService {
             throw TaskServiceError.templateNotFound
         }
 
-        let recurrence: RecurrenceRule?
-        if template.kind == .recurring,
-           draft.kind == .recurring,
-           var updatedRecurrence = draft.recurrence,
-           let originalStartDay = template.recurrence?.startDay {
-            updatedRecurrence.startDay = originalStartDay
-            recurrence = updatedRecurrence
-        } else {
-            recurrence = draft.recurrence
-        }
-
         template.title = title
         template.kind = draft.kind
-        template.recurrence = recurrence
+        template.recurrence = draft.recurrence
         template.reminderMode = draft.reminderMode
         template.reminderHour = draft.reminderHour
         template.reminderMinute = draft.reminderMinute
         template.updatedAt = now
 
-        let updatedTasks = try repository.dailyTasks(on: day).filter {
+        let targetDay = firstInstanceDay(for: draft, today: day)
+        let updatedTasks = try repository.dailyTasks(from: day).filter {
             $0.templateID == templateID && $0.completedAt == nil
         }
+        let hasExplicitFutureStart = draft.scheduledDay.map { $0 > day } ?? false
         for task in updatedTasks {
             task.titleSnapshot = title
+            let existingDay = LocalDay(rawValue: task.dayKey)
+            if existingDay > day || hasExplicitFutureStart {
+                task.dayKey = targetDay.rawValue
+            }
+            task.scheduledDayKey = draft.scheduledDay?.rawValue
             task.reminderMode = draft.reminderMode
             task.reminderHour = draft.reminderHour
             task.reminderMinute = draft.reminderMinute
@@ -226,6 +229,21 @@ public final class TaskService {
     private func nextSortIndex(on day: LocalDay) throws -> Int {
         let currentMax = try repository.dailyTasks(on: day).map(\.sortIndex).max()
         return (currentMax ?? -1_000) + 1_000
+    }
+
+    private func firstInstanceDay(for draft: TaskDraft, today: LocalDay) -> LocalDay {
+        guard draft.kind == .recurring, let recurrence = draft.recurrence else {
+            return draft.scheduledDay ?? today
+        }
+
+        let start = max(today, recurrence.startDay)
+        for offset in 0...370 {
+            let candidate = start.adding(days: offset, calendar: calendar)
+            if recurrence.matches(candidate, calendar: calendar) {
+                return candidate
+            }
+        }
+        return start
     }
 
     private func syncNotification(for task: DailyTask, now: Date) async throws {

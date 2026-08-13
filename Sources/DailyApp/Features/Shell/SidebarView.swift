@@ -62,7 +62,6 @@ struct SidebarView: View {
             }
         }
         .buttonStyle(.plain)
-        .focusEffectDisabled()
         .onHover { isHovered in
             hoveredDestination = isHovered ? value : nil
         }

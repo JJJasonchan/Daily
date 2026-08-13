@@ -154,6 +154,7 @@ final class AppModel {
     private(set) var todayTemplatesByID: [UUID: TaskTemplate] = [:]
     private(set) var selectedHistoryDay: LocalDay
     private(set) var errorMessage: String?
+    private(set) var quickCapturePermissionMessage: String?
     private(set) var lastCompletionUndo: CompletionUndoToken?
     private(set) var dailyReminderEnabled = false
     private(set) var colorSchemeMode: ColorSchemeMode = .system
@@ -256,6 +257,9 @@ final class AppModel {
 
     func start() async {
         startObservingLifecycleIfNeeded()
+        if let settings = try? reminderSettingsService.settings() {
+            apply(settings)
+        }
         let task = requestLifecycleRefresh(expectedGeneration: lifecycleGeneration)
         await task?.value
     }
@@ -661,6 +665,18 @@ final class AppModel {
 
     func clearError() {
         errorMessage = nil
+    }
+
+    func reportQuickCapturePermissionUnavailable() {
+        quickCapturePermissionMessage = "全局快速捕获需要辅助功能权限。请在系统设置 > 隐私与安全性 > 辅助功能中允许 Daily；应用内仍可使用 Command-Shift-N。"
+    }
+
+    func dismissPresentedMessage() {
+        if errorMessage != nil {
+            errorMessage = nil
+        } else {
+            quickCapturePermissionMessage = nil
+        }
     }
 
     func requestQuickAddFocus() {

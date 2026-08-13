@@ -1,4 +1,5 @@
 import Carbon.HIToolbox
+import ApplicationServices
 import Sparkle
 import SwiftUI
 
@@ -11,6 +12,7 @@ private var sharedUpdaterController: SPUStandardUpdaterController?
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var globalMonitor: Any?
+    private var localMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.activate(ignoringOtherApps: true)
@@ -49,17 +51,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let monitor = globalMonitor {
             NSEvent.removeMonitor(monitor)
         }
+        if let monitor = localMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
     }
 
     private func registerGlobalShortcut() {
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard QuickCaptureShortcut.matches(event) else { return event }
+            Task { @MainActor in
+                sharedQuickCapture?.show()
+            }
+            return nil
+        }
+
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
-            guard event.modifierFlags.contains([.command, .shift]),
-                  event.keyCode == 40 // K key
-            else { return }
+            guard QuickCaptureShortcut.matches(event) else { return }
             Task { @MainActor in
                 sharedQuickCapture?.show()
             }
         }
+
+        if !AXIsProcessTrusted() {
+            Task { @MainActor in
+                sharedModel?.reportQuickCapturePermissionUnavailable()
+            }
+        }
+    }
+}
+
+enum QuickCaptureShortcut {
+    static func matches(_ event: NSEvent) -> Bool {
+        matches(keyCode: event.keyCode, modifierFlags: event.modifierFlags)
+    }
+
+    static func matches(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> Bool {
+        var relevantFlags = modifierFlags.intersection(.deviceIndependentFlagsMask)
+        relevantFlags.remove(.capsLock)
+        return keyCode == UInt16(kVK_ANSI_N)
+            && relevantFlags == [.command, .shift]
     }
 }
 
@@ -83,7 +116,6 @@ struct DailyApp: App {
     var body: some Scene {
         Window("Daily", id: "main") {
             AppShellView(model: sceneState.windowModel)
-                .focusEffectDisabled()
                 .task {
                     await sceneState.activate()
                 }
@@ -105,7 +137,6 @@ struct DailyApp: App {
 
         MenuBarExtra {
             MenuBarContentView(model: sceneState.menuBarModel)
-                .focusEffectDisabled()
                 .task {
                     await sceneState.activate()
                 }
@@ -123,6 +154,11 @@ private struct DailyCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .newItem) {
+            Button("快速捕获") {
+                sharedQuickCapture?.show()
+            }
+            .keyboardShortcut("n", modifiers: [.command, .shift])
+
             Button("快速添加") {
                 showMainWindow()
                 router.focusQuickAdd()

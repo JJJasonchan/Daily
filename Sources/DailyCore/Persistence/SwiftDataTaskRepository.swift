@@ -49,6 +49,18 @@ public final class SwiftDataTaskRepository: TaskRepository {
         return try context.fetch(descriptor)
     }
 
+    public func dailyTasks(from start: LocalDay) throws -> [DailyTask] {
+        let startDayKey = start.rawValue
+        let descriptor = FetchDescriptor<DailyTask>(
+            predicate: #Predicate { $0.dayKey >= startDayKey },
+            sortBy: [
+                SortDescriptor(\DailyTask.dayKey),
+                SortDescriptor(\DailyTask.sortIndex)
+            ]
+        )
+        return try context.fetch(descriptor)
+    }
+
     public func dailyTask(id: UUID) throws -> DailyTask? {
         let descriptor = FetchDescriptor<DailyTask>(predicate: #Predicate { $0.id == id })
         return try context.fetch(descriptor).first

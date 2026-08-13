@@ -2,6 +2,11 @@ import AppKit
 import DailyCore
 import SwiftUI
 
+private final class QuickCapturePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
 /// Floating glass quick-capture window invoked by global shortcut Command-Shift-N.
 @MainActor
 final class QuickCaptureWindow {
@@ -14,12 +19,13 @@ final class QuickCaptureWindow {
 
     func show() {
         if let existing = window, existing.isVisible {
+            existing.appearance = NSAppearance.from(colorSchemeMode: model.colorSchemeMode)
             existing.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
 
-        let panel = NSPanel(
+        let panel = QuickCapturePanel(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 140),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -32,7 +38,9 @@ final class QuickCaptureWindow {
         panel.titlebarAppearsTransparent = true
         panel.isOpaque = false
         panel.backgroundColor = .clear
+        panel.appearance = NSAppearance.from(colorSchemeMode: model.colorSchemeMode)
         panel.hasShadow = true
+        panel.isReleasedWhenClosed = false
         panel.center()
 
         let host = NSHostingView(
@@ -41,10 +49,10 @@ final class QuickCaptureWindow {
             })
         )
         panel.contentView = host
-        panel.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-
         self.window = panel
+        NSApp.activate(ignoringOtherApps: true)
+        panel.orderFrontRegardless()
+        panel.makeKey()
     }
 }
 
@@ -71,7 +79,6 @@ private struct QuickCaptureContent: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .focusEffectDisabled()
             }
 
             Spacer().frame(height: 16)
@@ -82,7 +89,6 @@ private struct QuickCaptureContent: View {
 
                 TextField("输入任务标题，回车添加", text: $title)
                     .textFieldStyle(.plain)
-                    .focusEffectDisabled(true)
                     .focused($isFocused)
                     .onSubmit(submit)
                     .accessibilityLabel("新任务标题")
@@ -93,6 +99,7 @@ private struct QuickCaptureContent: View {
         }
         .padding(20)
         .frame(width: 400, height: 140)
+        .preferredColorScheme(model.colorSchemeMode.swiftUIColorScheme)
         .onAppear {
             isFocused = true
         }

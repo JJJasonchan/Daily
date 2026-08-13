@@ -135,7 +135,6 @@ struct TaskRow: View {
         .animation(motion.animation, value: isFocused)
         .focusable()
         .focused($isFocused)
-        .focusEffectDisabled(true)
         .onKeyPress(.space) {
             onToggle()
             return .handled

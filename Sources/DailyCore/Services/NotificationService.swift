@@ -76,7 +76,7 @@ public final class NotificationService: NotificationScheduling {
         case .none:
             return
         case .once:
-            guard let nominalDate = nominalDate(for: task), isFutureSameDay(nominalDate, relativeTo: now) else {
+            guard let nominalDate = nominalDate(for: task), nominalDate > now else {
                 return
             }
             try await addTaskRequest(
@@ -134,7 +134,7 @@ public final class NotificationService: NotificationScheduling {
         }
 
         let todayKey = LocalDay(date: now, calendar: calendar).rawValue
-        for task in tasks where task.dayKey == todayKey && task.completedAt == nil {
+        for task in tasks where task.dayKey >= todayKey && task.completedAt == nil {
             try await sync(task: task, persistentIntervalMinutes: settings.persistentIntervalMinutes, now: now)
         }
         try await syncDailyReminder(settings: settings, now: now)
@@ -144,7 +144,7 @@ public final class NotificationService: NotificationScheduling {
         guard intervalMinutes > 0, let nominalDate = nominalDate(for: task) else { return }
 
         let interval = TimeInterval(intervalMinutes * 60)
-        if isFutureSameDay(nominalDate, relativeTo: now) {
+        if nominalDate > now {
             try await addTaskRequest(task: task, sequence: 0, trigger: calendarTrigger(at: nominalDate))
             for sequence in 1..<Self.persistentRequestCount {
                 let delay = nominalDate.timeIntervalSince(now) + (TimeInterval(sequence) * interval)
@@ -200,10 +200,6 @@ public final class NotificationService: NotificationScheduling {
         components.hour = hour
         components.minute = minute
         return calendar.date(from: components)
-    }
-
-    private func isFutureSameDay(_ date: Date, relativeTo now: Date) -> Bool {
-        date > now && calendar.isDate(date, inSameDayAs: now)
     }
 
     private func calendarTrigger(at date: Date) -> UNCalendarNotificationTrigger {

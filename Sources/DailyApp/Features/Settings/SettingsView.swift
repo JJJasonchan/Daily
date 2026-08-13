@@ -116,7 +116,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .focusEffectDisabled()
         .frame(maxWidth: 680)
         .padding(.horizontal, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

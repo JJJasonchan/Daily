@@ -70,8 +70,10 @@ public final class DayRolloverService {
             }
         }
 
-        let incompleteToday = try repository.dailyTasks(on: today).filter { $0.completedAt == nil }
-        try await notifications.rebuild(tasks: incompleteToday, settings: settings, now: now)
+        let incompleteUpcoming = try repository.dailyTasks(from: today).filter {
+            $0.completedAt == nil
+        }
+        try await notifications.rebuild(tasks: incompleteUpcoming, settings: settings, now: now)
     }
 
     public func historyStatus(for task: DailyTask, allTasks: [DailyTask]) -> HistoryStatus {

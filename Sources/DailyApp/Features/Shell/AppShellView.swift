@@ -11,10 +11,8 @@ struct AppShellView: View {
             detail
                 .background(.ultraThinMaterial)
         }
-        .background(.clear)
         .preferredColorScheme(model.colorSchemeMode.swiftUIColorScheme)
         .navigationSplitViewStyle(.balanced)
-        .focusEffectDisabled()
         .sheet(isPresented: editorPresentation) {
             if let editingTemplate {
                 TaskEditorView(model: model, template: editingTemplate)
@@ -24,10 +22,10 @@ struct AppShellView: View {
         }
         .alert("Daily", isPresented: errorPresentation) {
             Button("好") {
-                model.clearError()
+                model.dismissPresentedMessage()
             }
         } message: {
-            Text(model.errorMessage ?? "")
+            Text(model.errorMessage ?? model.quickCapturePermissionMessage ?? "")
         }
     }
 
@@ -73,10 +71,12 @@ struct AppShellView: View {
 
     private var errorPresentation: Binding<Bool> {
         Binding(
-            get: { model.errorMessage != nil },
+            get: {
+                model.errorMessage != nil || model.quickCapturePermissionMessage != nil
+            },
             set: { isPresented in
                 if !isPresented {
-                    model.clearError()
+                    model.dismissPresentedMessage()
                 }
             }
         )

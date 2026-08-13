@@ -86,7 +86,6 @@ struct MenuBarContentView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderless)
-            .focusEffectDisabled()
             .frame(height: 38)
             .glassModule(interactive: true, cornerRadius: 13)
             .accessibilityHint("打开并置前主窗口")
@@ -189,7 +188,6 @@ struct MenuBarContentView: View {
                 .accessibilityLabel("菜单栏新任务标题")
             Button("添加", action: addTask)
                 .buttonStyle(.borderless)
-                .focusEffectDisabled()
                 .disabled(trimmedQuickAddTitle.isEmpty || isAdding)
         }
         .padding(.horizontal, 13)
@@ -258,7 +256,6 @@ struct MenuBarContentView: View {
                 undo(token)
             }
             .buttonStyle(.borderless)
-            .focusEffectDisabled()
             .disabled(isUndoing)
         }
         .padding(.horizontal, 13)

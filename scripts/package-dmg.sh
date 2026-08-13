@@ -49,6 +49,7 @@ sleep 1
 
 # Convert to compressed DMG
 mkdir -p "$project_dir/build"
+rm -f "$dmg_path"
 hdiutil convert "$tmp_dmg" -format UDZO -imagekey zlib-level=9 -o "$dmg_path" >/dev/null 2>&1
 rm -f "$tmp_dmg"
 

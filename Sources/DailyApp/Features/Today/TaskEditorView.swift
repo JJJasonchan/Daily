@@ -10,6 +10,27 @@ enum TaskEditorRecurrenceStartDay {
     }
 }
 
+struct TaskEditorScheduleState: Equatable {
+    let day: LocalDay?
+    let isExplicit: Bool
+
+    static func resolve(
+        task: DailyTask?,
+        template: TaskTemplate?
+    ) -> TaskEditorScheduleState {
+        if let scheduledDayKey = task?.scheduledDayKey {
+            return TaskEditorScheduleState(
+                day: LocalDay(rawValue: scheduledDayKey),
+                isExplicit: true
+            )
+        }
+        if template?.kind == .recurring, let startDay = template?.recurrence?.startDay {
+            return TaskEditorScheduleState(day: startDay, isExplicit: true)
+        }
+        return TaskEditorScheduleState(day: nil, isExplicit: false)
+    }
+}
+
 enum TaskEditorMode: Equatable {
     case newTask
     case template
@@ -80,6 +101,10 @@ struct TaskEditorView: View {
         }
         mode = TaskEditorMode.resolve(task: task, template: resolvedTemplate)
         let recurrence = resolvedTemplate?.recurrence
+        let scheduleState = TaskEditorScheduleState.resolve(
+            task: task,
+            template: resolvedTemplate
+        )
         let hour = task?.reminderHour ?? resolvedTemplate?.reminderHour ?? 9
         let minute = task?.reminderMinute ?? resolvedTemplate?.reminderMinute ?? 0
         let time = Calendar.autoupdatingCurrent.date(
@@ -97,10 +122,11 @@ struct TaskEditorView: View {
                 currentDay: model.currentDay
             )
         )
-        if let scheduledKey = task?.scheduledDayKey {
-            let day = LocalDay(rawValue: scheduledKey)
-            _scheduledDate = State(initialValue: day.date(in: Calendar.autoupdatingCurrent))
-            _hasScheduledDate = State(initialValue: true)
+        if let scheduledDay = scheduleState.day {
+            _scheduledDate = State(
+                initialValue: scheduledDay.date(in: Calendar.autoupdatingCurrent)
+            )
+            _hasScheduledDate = State(initialValue: scheduleState.isExplicit)
         } else {
             _scheduledDate = State(initialValue: nil)
             _hasScheduledDate = State(initialValue: false)
@@ -131,7 +157,6 @@ struct TaskEditorView: View {
 
             Form {
                 TextField("任务标题", text: $title)
-                    .focusEffectDisabled(true)
                     .accessibilityLabel("任务标题")
 
                 if mode.showsTaskType {
@@ -235,7 +260,6 @@ struct TaskEditorView: View {
             height: mode.showsRecurrence && kind == .recurring ? 640 : 500
         )
         .accessibilityElement(children: .contain)
-        .focusEffectDisabled()
     }
 
     private var weekdayPicker: some View {

@@ -43,17 +43,39 @@ final class NotificationServiceTests: XCTestCase {
         XCTAssertEqual(trigger.dateComponents.minute, 30)
     }
 
-    func testOnceDoesNotSchedulePastOrDifferentDayTime() async throws {
+    func testOnceDoesNotSchedulePastTime() async throws {
         let past = makeTask(reminderMode: .once, hour: 9, minute: 59)
-        let tomorrow = makeTask(dayKey: "2026-08-13", reminderMode: .once, hour: 10, minute: 30)
         let center = RecordingNotificationCenter()
         let service = NotificationService(center: center, calendar: calendar)
         let now = date(2026, 8, 12, 10, 0)
 
         try await service.sync(task: past, persistentIntervalMinutes: 15, now: now)
-        try await service.sync(task: tomorrow, persistentIntervalMinutes: 15, now: now)
 
         XCTAssertTrue(center.addedRequests.isEmpty)
+    }
+
+    func testOnceSchedulesFuturePlannedDayWithCalendarTrigger() async throws {
+        let tomorrow = makeTask(
+            dayKey: "2026-08-13",
+            reminderMode: .once,
+            hour: 10,
+            minute: 30
+        )
+        let center = RecordingNotificationCenter()
+        let service = NotificationService(center: center, calendar: calendar)
+
+        try await service.sync(
+            task: tomorrow,
+            persistentIntervalMinutes: 15,
+            now: date(2026, 8, 12, 10, 0)
+        )
+
+        let trigger = try XCTUnwrap(
+            center.addedRequests.first?.trigger as? UNCalendarNotificationTrigger
+        )
+        XCTAssertEqual(trigger.dateComponents.day, 13)
+        XCTAssertEqual(trigger.dateComponents.hour, 10)
+        XCTAssertEqual(trigger.dateComponents.minute, 30)
     }
 
     func testPersistentPastNominalTimeStartsAtNowPlusIntervalAndCreatesEightRequests() async throws {
@@ -122,6 +144,12 @@ final class NotificationServiceTests: XCTestCase {
 
     func testRebuildRemovesStaleTaskRequestsAndSchedulesOnlyTodaysIncompleteTasks() async throws {
         let todayIncomplete = makeTask(reminderMode: .persistent, hour: 8, minute: 0)
+        let futureIncomplete = makeTask(
+            dayKey: "2026-08-13",
+            reminderMode: .once,
+            hour: 9,
+            minute: 0
+        )
         let yesterdayIncomplete = makeTask(dayKey: "2026-08-11", reminderMode: .persistent, hour: 8, minute: 0)
         let todayCompleted = makeTask(
             reminderMode: .persistent,
@@ -135,13 +163,14 @@ final class NotificationServiceTests: XCTestCase {
         let service = NotificationService(center: center, calendar: calendar)
 
         try await service.rebuild(
-            tasks: [yesterdayIncomplete, todayCompleted, todayIncomplete],
+            tasks: [yesterdayIncomplete, todayCompleted, todayIncomplete, futureIncomplete],
             settings: AppSettings(persistentIntervalMinutes: 15),
             now: date(2026, 8, 12, 10, 0)
         )
 
         XCTAssertTrue(center.removedIDs.contains(stale.identifier))
         let expectedTaskIDs = (0..<8).map { NotificationID.task(todayIncomplete.id, sequence: $0) }
+            + [NotificationID.task(futureIncomplete.id, sequence: 0)]
         XCTAssertEqual(center.addedRequests.map(\.identifier), expectedTaskIDs)
         XCTAssertEqual(
             center.pending.map(\.identifier).filter { $0.hasPrefix("task.") },

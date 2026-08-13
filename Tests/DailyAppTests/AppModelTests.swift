@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Foundation
 import UserNotifications
 import Sparkle
@@ -10,6 +11,44 @@ import XCTest
 final class AppModelTests: XCTestCase {
     private let day = LocalDay(rawValue: "2026-08-12")
     private let now = Date(timeIntervalSince1970: 1_786_521_600)
+
+    func testQuickCaptureShortcutMatchesOnlyCommandShiftN() {
+        XCTAssertTrue(
+            QuickCaptureShortcut.matches(
+                keyCode: UInt16(kVK_ANSI_N),
+                modifierFlags: [.command, .shift]
+            )
+        )
+        XCTAssertTrue(
+            QuickCaptureShortcut.matches(
+                keyCode: UInt16(kVK_ANSI_N),
+                modifierFlags: [.command, .shift, .capsLock]
+            )
+        )
+        XCTAssertFalse(
+            QuickCaptureShortcut.matches(
+                keyCode: UInt16(kVK_ANSI_K),
+                modifierFlags: [.command, .shift]
+            )
+        )
+        XCTAssertFalse(
+            QuickCaptureShortcut.matches(
+                keyCode: UInt16(kVK_ANSI_N),
+                modifierFlags: [.command]
+            )
+        )
+    }
+
+    func testUnavailableGlobalQuickCapturePermissionShowsActionableMessage() {
+        let fixture = makeFixture()
+
+        fixture.model.reportQuickCapturePermissionUnavailable()
+
+        XCTAssertEqual(
+            fixture.model.quickCapturePermissionMessage,
+            "全局快速捕获需要辅助功能权限。请在系统设置 > 隐私与安全性 > 辅助功能中允许 Daily；应用内仍可使用 Command-Shift-N。"
+        )
+    }
 
     func testMotionSpecsKeepInteractionSemanticsInspectable() {
         XCTAssertEqual(MotionTokens.pressScale, 0.97)
@@ -171,6 +210,11 @@ final class AppModelTests: XCTestCase {
                 currentDay: fixture.model.currentDay
             ),
             day
+        )
+
+        XCTAssertEqual(
+            TaskEditorScheduleState.resolve(task: nil, template: template),
+            TaskEditorScheduleState(day: originalStart, isExplicit: true)
         )
     }
 
@@ -879,6 +923,20 @@ final class AppModelTests: XCTestCase {
 
         XCTAssertEqual(fixture.model.todayTasks.map(\.templateID), [template.id])
         XCTAssertNil(fixture.model.errorMessage)
+    }
+
+    func testStartLoadsPersistedColorScheme() async {
+        let settings = AppSettings(
+            lastProcessedDayKey: day.rawValue,
+            colorSchemeMode: .dark
+        )
+        let fixture = makeFixture(settings: settings)
+
+        XCTAssertEqual(fixture.model.colorSchemeMode, .system)
+
+        await fixture.model.start()
+
+        XCTAssertEqual(fixture.model.colorSchemeMode, .dark)
     }
 
     func testRepeatedStartRegistersLifecycleObserversOnlyOnceAndCleanupIsExplicit() async {

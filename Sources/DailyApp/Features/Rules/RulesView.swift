@@ -61,7 +61,6 @@ struct RulesView: View {
             }
         }
         .navigationTitle("重复规则")
-        .focusEffectDisabled()
     }
 
     private func ruleRow(_ template: TaskTemplate) -> some View {

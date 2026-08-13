@@ -131,7 +131,6 @@ struct TodayView: View {
 
                     TextField("新任务（回车添加）", text: $quickAddText)
                         .textFieldStyle(.plain)
-                        .focusEffectDisabled(true)
                         .onSubmit(submitQuickAdd)
                         .accessibilityLabel("新任务标题")
 
@@ -142,7 +141,6 @@ struct TodayView: View {
                             .font(.system(size: 16))
                     }
                     .buttonStyle(.plain)
-                    .focusEffectDisabled()
                     .keyboardShortcut("n", modifiers: .command)
                     .help("打开完整任务编辑器（可设置重复、提醒、计划日期）")
                 }
@@ -314,7 +312,6 @@ struct TodayView: View {
                 undo(token)
             }
                 .buttonStyle(.borderless)
-                .focusEffectDisabled()
                 .keyboardShortcut("z", modifiers: .command)
         }
         .padding(.horizontal, 16)
@@ -491,7 +488,6 @@ struct TodayView: View {
                     TextField("输入任务标题", text: $inlineAddText)
                         .textFieldStyle(.plain)
                         .focused($isInlineAddFocused)
-                        .focusEffectDisabled(true)
                         .onSubmit(submitInlineAdd)
                         .accessibilityLabel("新任务标题")
 
