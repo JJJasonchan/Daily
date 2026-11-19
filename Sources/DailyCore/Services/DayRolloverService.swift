@@ -29,6 +29,8 @@ public final class DayRolloverService {
             firstDay = today
         }
 
+        try reconcileFutureInstances(after: today, calendar: calendar)
+
         if firstDay <= today {
             let enabledTemplates = try repository.templates(enabledOnly: true)
             let templatesByID = Dictionary(
@@ -86,6 +88,43 @@ public final class DayRolloverService {
         return .incomplete
     }
 
+    private func reconcileFutureInstances(after day: LocalDay, calendar: Calendar) throws {
+        let tomorrow = day.adding(days: 1, calendar: calendar)
+        let tasks = try repository.dailyTasks(from: tomorrow)
+        guard !tasks.isEmpty else { return }
+        let templates = Dictionary(uniqueKeysWithValues: try repository.templates(enabledOnly: false).map { ($0.id, $0) })
+        var didChange = false
+
+        for (templateID, instances) in Dictionary(grouping: tasks, by: \.templateID) {
+            let incomplete = instances.filter { $0.completedAt == nil }
+            // Only recurring-rule deletion could leave a future instance without a template.
+            guard let template = templates[templateID], template.isEnabled else {
+                incomplete.forEach { repository.remove($0) }
+                didChange = didChange || !incomplete.isEmpty
+                continue
+            }
+            guard template.kind == .recurring,
+                  let rule = template.recurrence,
+                  rule.frequency == .monthly, rule.dayOfMonth == nil,
+                  let nextDay = rule.firstOccurrence(onOrAfter: tomorrow, calendar: calendar)
+            else { continue }
+
+            var hasNextOccurrence = instances.contains { $0.dayKey == nextDay.rawValue }
+            for task in incomplete where !rule.matches(LocalDay(rawValue: task.dayKey), calendar: calendar) {
+                if hasNextOccurrence {
+                    repository.remove(task)
+                } else {
+                    task.dayKey = nextDay.rawValue
+                    task.originalDayKey = nextDay.rawValue
+                    hasNextOccurrence = true
+                }
+                didChange = true
+            }
+        }
+
+        if didChange { try repository.save() }
+    }
+
     private func rollIncompleteOneTimeTasks(
         from previousDay: LocalDay,
         to day: LocalDay,
@@ -114,7 +153,9 @@ public final class DayRolloverService {
                     rolloverOriginID: task.id,
                     originalDayKey: task.originalDayKey,
                     rolloverCount: task.rolloverCount + 1,
-                    createdAt: now
+                    createdAt: now,
+                    priority: task.priority,
+                    assignee: task.assignee
                 )
             )
         }
@@ -142,7 +183,9 @@ public final class DayRolloverService {
                     reminderHour: template.reminderHour,
                     reminderMinute: template.reminderMinute,
                     sortIndex: template.sortIndex,
-                    createdAt: now
+                    createdAt: now,
+                    priority: template.priority,
+                    assignee: template.assignee
                 )
             )
         }

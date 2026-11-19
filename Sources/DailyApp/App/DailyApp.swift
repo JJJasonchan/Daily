@@ -6,6 +6,8 @@ import SwiftUI
 @MainActor
 private var sharedQuickCapture: QuickCaptureWindow?
 @MainActor
+private var sharedQuickMemo: QuickMemoWindow?
+@MainActor
 private var sharedModel: AppModel?
 @MainActor
 private var sharedUpdaterController: SPUStandardUpdaterController?
@@ -58,17 +60,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func registerGlobalShortcut() {
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard QuickCaptureShortcut.matches(event) else { return event }
-            Task { @MainActor in
-                sharedQuickCapture?.show()
+            if QuickCaptureShortcut.matches(event) {
+                Task { @MainActor in
+                    sharedQuickCapture?.show()
+                }
+                return nil
             }
-            return nil
+            if QuickMemoShortcut.matches(event) {
+                Task { @MainActor in
+                    sharedQuickMemo?.show()
+                }
+                return nil
+            }
+            return event
         }
 
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
-            guard QuickCaptureShortcut.matches(event) else { return }
-            Task { @MainActor in
-                sharedQuickCapture?.show()
+            if QuickCaptureShortcut.matches(event) {
+                Task { @MainActor in
+                    sharedQuickCapture?.show()
+                }
+            } else if QuickMemoShortcut.matches(event) {
+                Task { @MainActor in
+                    sharedQuickMemo?.show()
+                }
             }
         }
 
@@ -96,6 +111,27 @@ enum QuickCaptureShortcut {
     }
 }
 
+enum QuickMemoShortcut {
+    static func matches(_ event: NSEvent) -> Bool {
+        matches(keyCode: event.keyCode, modifierFlags: event.modifierFlags)
+    }
+
+    static func matches(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> Bool {
+        var relevantFlags = modifierFlags.intersection(.deviceIndependentFlagsMask)
+        relevantFlags.remove(.capsLock)
+        return keyCode == UInt16(kVK_ANSI_M)
+            && relevantFlags == [.command, .shift]
+    }
+}
+
+@MainActor
+func showQuickMemoWindow() {
+    sharedQuickMemo?.show()
+}
+
 @main
 @MainActor
 struct DailyApp: App {
@@ -109,6 +145,7 @@ struct DailyApp: App {
         let model = deps.appModel
         _sceneState = State(initialValue: AppSceneState(model: model))
         sharedQuickCapture = QuickCaptureWindow(model: model)
+        sharedQuickMemo = QuickMemoWindow(model: model)
         sharedModel = model
         sharedUpdaterController = deps.updaterController
     }
@@ -116,6 +153,7 @@ struct DailyApp: App {
     var body: some Scene {
         Window("Daily", id: "main") {
             AppShellView(model: sceneState.windowModel)
+                .background(TransparentTitlebar())
                 .task {
                     await sceneState.activate()
                 }
@@ -159,6 +197,11 @@ private struct DailyCommands: Commands {
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
 
+            Button("快速记录备忘录") {
+                sharedQuickMemo?.show()
+            }
+            .keyboardShortcut("m", modifiers: [.command, .shift])
+
             Button("快速添加") {
                 showMainWindow()
                 router.focusQuickAdd()
@@ -184,7 +227,8 @@ private struct DailyCommands: Commands {
             destinationButton("今日", destination: .today, key: "1")
             destinationButton("重复规则", destination: .rules, key: "2")
             destinationButton("历史记录", destination: .history, key: "3")
-            destinationButton("设置", destination: .settings, key: "4")
+            destinationButton("备忘录", destination: .memo, key: "4")
+            destinationButton("设置", destination: .settings, key: "5")
         }
     }
 

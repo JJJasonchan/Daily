@@ -60,6 +60,11 @@ struct HistoryDaySummary: Identifiable {
     var completionFraction: Double? {
         tasks.isEmpty ? nil : Double(completedCount) / Double(tasks.count)
     }
+
+    var percentageText: String {
+        guard let fraction = completionFraction else { return "—" }
+        return "\(Int((fraction * 100).rounded()))%"
+    }
 }
 
 @MainActor
@@ -146,12 +151,16 @@ final class AppModel {
         case today
         case rules
         case history
+        case memo
         case settings
     }
 
     private(set) var todayTasks: [DailyTask] = []
+    private(set) var upcomingTasks: [DailyTask] = []
+    private(set) var taskDataRevision = 0
     private(set) var templates: [TaskTemplate] = []
-    private(set) var todayTemplatesByID: [UUID: TaskTemplate] = [:]
+    private(set) var editorTemplatesByID: [UUID: TaskTemplate] = [:]
+    private(set) var memos: [Memo] = []
     private(set) var selectedHistoryDay: LocalDay
     private(set) var errorMessage: String?
     private(set) var quickCapturePermissionMessage: String?
@@ -166,12 +175,14 @@ final class AppModel {
     var editorTaskID: UUID?
     var editorTemplateID: UUID?
     var isPresentingNewTask = false
+    var isPresentingNewRecurringTask = false
     private(set) var quickAddFocusRequestID: UUID?
 
     private let taskService: TaskService
     private let rolloverService: DayRolloverService
     private let reminderSettingsService: ReminderSettingsService
     private let repository: any TaskRepository
+    private let memoService: MemoService
     private let dayProvider: any DayProviding
     private let notificationService: NotificationService
     private let lifecycleObserver: any AppLifecycleObserving
@@ -191,6 +202,7 @@ final class AppModel {
         rolloverService: DayRolloverService,
         reminderSettingsService: ReminderSettingsService,
         repository: any TaskRepository,
+        memoService: MemoService,
         dayProvider: any DayProviding,
         notificationService: NotificationService,
         lifecycleObserver: any AppLifecycleObserving = SystemAppLifecycleObserver(),
@@ -201,6 +213,7 @@ final class AppModel {
         self.rolloverService = rolloverService
         self.reminderSettingsService = reminderSettingsService
         self.repository = repository
+        self.memoService = memoService
         self.dayProvider = dayProvider
         self.notificationService = notificationService
         self.lifecycleObserver = lifecycleObserver
@@ -255,11 +268,37 @@ final class AppModel {
         }
     }
 
+    func completionTrend(ending day: LocalDay, days: Int) throws -> [(LocalDay, Double?)] {
+        let calendar = dayProvider.calendar
+        let count = max(days, 1)
+        let start = day.adding(days: -(count - 1), calendar: calendar)
+        let range = (0..<count).map { start.adding(days: $0, calendar: calendar) }
+        let tasks = try repository.dailyTasks(from: start, through: day)
+        return HistoryAnalytics.completionFractions(tasks: tasks, days: range)
+    }
+
+    func currentStreak(ending day: LocalDay) throws -> Int {
+        let calendar = dayProvider.calendar
+        let start = day.adding(days: -365, calendar: calendar)
+        let tasks = try repository.dailyTasks(from: start, through: day)
+        return HistoryAnalytics.currentStreak(
+            tasks: tasks, ending: day, calendar: calendar, endingDayIsInProgress: day == today
+        )
+    }
+
+    func longestStreak(ending day: LocalDay, within days: Int) throws -> Int {
+        let calendar = dayProvider.calendar
+        let start = day.adding(days: -(max(days, 1) - 1), calendar: calendar)
+        let tasks = try repository.dailyTasks(from: start, through: day)
+        return HistoryAnalytics.longestStreak(tasks: tasks, ending: day, within: days, calendar: calendar)
+    }
+
     func start() async {
         startObservingLifecycleIfNeeded()
         if let settings = try? reminderSettingsService.settings() {
             apply(settings)
         }
+        loadMemos()
         let task = requestLifecycleRefresh(expectedGeneration: lifecycleGeneration)
         await task?.value
     }
@@ -267,21 +306,24 @@ final class AppModel {
     func reload() throws {
         let day = LocalDay(date: dayProvider.now, calendar: dayProvider.calendar)
         let loadedTasks = try taskService.today(on: day)
+        let loadedUpcoming = try taskService.upcoming(on: day)
         let loadedTemplates = try taskService.recurringTemplates()
-        var loadedTodayTemplates: [UUID: TaskTemplate] = [:]
-        for templateID in Set(loadedTasks.map(\.templateID)) {
+        var loadedEditorTemplates: [UUID: TaskTemplate] = [:]
+        for templateID in Set((loadedTasks + loadedUpcoming).map(\.templateID)) {
             if let template = try repository.template(id: templateID) {
-                loadedTodayTemplates[templateID] = template
+                loadedEditorTemplates[templateID] = template
             }
         }
         todayTasks = loadedTasks
+        upcomingTasks = loadedUpcoming
+        taskDataRevision &+= 1
         templates = loadedTemplates
-        todayTemplatesByID = loadedTodayTemplates
+        editorTemplatesByID = loadedEditorTemplates
         errorMessage = nil
     }
 
     func editorTemplate(for task: DailyTask) -> TaskTemplate? {
-        todayTemplatesByID[task.templateID]
+        editorTemplatesByID[task.templateID]
     }
 
     func selectHistoryDay(_ day: LocalDay) {
@@ -303,6 +345,49 @@ final class AppModel {
             return .failure
         }
         return reloadAfterSavedMutation() ? .success : .partialSuccess
+    }
+
+    // MARK: - Memos
+
+    @discardableResult
+    func addMemo(_ body: String) async -> MutationResult {
+        do {
+            _ = try memoService.create(body, now: dayProvider.now)
+        } catch {
+            errorMessage = memoErrorMessage(for: error, fallback: "保存备忘录失败。请重试。")
+            return .failure
+        }
+        return reloadAfterMemoMutation() ? .success : .partialSuccess
+    }
+
+    @discardableResult
+    func updateMemo(id: UUID, body: String) async -> MutationResult {
+        do {
+            try memoService.update(id: id, body: body, now: dayProvider.now)
+        } catch {
+            errorMessage = memoErrorMessage(for: error, fallback: "保存备忘录失败。请重试。")
+            return .failure
+        }
+        return reloadAfterMemoMutation() ? .success : .partialSuccess
+    }
+
+    func deleteMemo(_ memo: Memo) async {
+        do {
+            try memoService.delete(id: memo.id)
+        } catch {
+            errorMessage = "删除备忘录失败。请重试。"
+            return
+        }
+        reloadAfterMemoMutation()
+    }
+
+    func loadMemos() {
+        do {
+            try reloadMemos()
+            errorMessage = nil
+        } catch {
+            errorMessage = "读取备忘录失败。请重试。"
+        }
     }
 
     @discardableResult
@@ -384,10 +469,14 @@ final class AppModel {
     func setTemplateEnabled(
         _ template: TaskTemplate,
         enabled: Bool
-    ) -> MutationResult {
+    ) async -> MutationResult {
         do {
-            try taskService.setTemplateEnabled(id: template.id, enabled: enabled)
+            try await taskService.setTemplateEnabled(id: template.id, enabled: enabled, on: today, now: dayProvider.now)
         } catch {
+            if (error as? TaskServiceError) == .notificationSyncFailed {
+                reloadAfterTemplateMutation(successMessage: "规则已启用，但提醒安排失败。请重试。")
+                return .partialSuccess
+            }
             errorMessage = "更新重复规则状态失败。请重试。"
             return .failure
         }
@@ -406,9 +495,9 @@ final class AppModel {
     }
 
     @discardableResult
-    func deleteTemplate(_ template: TaskTemplate) -> MutationResult {
+    func deleteTemplate(_ template: TaskTemplate) async -> MutationResult {
         do {
-            try taskService.deleteTemplate(id: template.id)
+            try await taskService.deleteTemplate(id: template.id, on: today)
         } catch {
             errorMessage = "删除重复规则失败。请重试。"
             return .failure
@@ -445,9 +534,9 @@ final class AppModel {
             )
         } catch {
             if (error as? ReminderSettingsError) == .invalidInterval {
-                errorMessage = "持续提醒间隔仅支持 5、10、15、30 或 60 分钟。"
+                errorMessage = "重复提醒间隔仅支持 5、10、15、30 或 60 分钟。"
             } else {
-                errorMessage = "保存持续提醒间隔失败。请重试。"
+                errorMessage = "保存重复提醒间隔失败。请重试。"
             }
             return .failure
         }
@@ -471,9 +560,9 @@ final class AppModel {
                 return .partialSuccess
             }
             if (error as? ReminderSettingsError) == .invalidTime {
-                errorMessage = "持续提醒间隔已保存，但每日提醒时间无效。"
+                errorMessage = "重复提醒间隔已保存，但每日提醒时间无效。"
             } else {
-                errorMessage = "持续提醒间隔已保存，但每日提醒设置保存失败。请重试。"
+                errorMessage = "重复提醒间隔已保存，但每日提醒设置保存失败。请重试。"
             }
             self.persistentIntervalMinutes = persistentIntervalMinutes
             return .partialSuccess
@@ -653,6 +742,16 @@ final class AppModel {
         reloadAfterSavedMutation()
     }
 
+    func cancelUpcoming(_ task: DailyTask) async {
+        do {
+            try await taskService.cancelUpcoming(id: task.id, on: today)
+        } catch {
+            errorMessage = "取消安排失败。请刷新列表后重试。"
+            return
+        }
+        reloadAfterSavedMutation()
+    }
+
     func reorder(ids: [UUID]) {
         do {
             try taskService.reorder(ids: ids)
@@ -758,8 +857,10 @@ final class AppModel {
             return "添加任务失败。请重试。"
         }
         switch serviceError {
+        case .scheduledDayInPast:
+            return "请选择今天或之后的安排日期。"
         case .emptyTitle:
-            return "任务标题不能为空。"
+            return "请输入任务名称。"
         case .recurrenceRequired:
             return "重复任务需要选择重复规则。"
         case .notificationSyncFailed:
@@ -777,8 +878,10 @@ final class AppModel {
     ) -> String {
         guard let serviceError = error as? TaskServiceError else { return fallback }
         switch serviceError {
+        case .scheduledDayInPast:
+            return "请选择今天或之后的安排日期。"
         case .emptyTitle:
-            return "任务标题不能为空。"
+            return "请输入任务名称。"
         case .recurrenceRequired:
             return "重复任务需要选择重复规则。"
         case .taskNotFound, .templateNotFound, .instanceStillHasTemplate,
@@ -850,6 +953,29 @@ final class AppModel {
             errorMessage = "重复规则已保存，但列表刷新失败。请重试。"
             return false
         }
+    }
+
+    private func reloadMemos() throws {
+        memos = try memoService.memos()
+    }
+
+    @discardableResult
+    private func reloadAfterMemoMutation() -> Bool {
+        do {
+            try reloadMemos()
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = "备忘录已保存，但列表刷新失败。请重试。"
+            return false
+        }
+    }
+
+    private func memoErrorMessage(for error: Error, fallback: String) -> String {
+        if (error as? MemoServiceError) == .emptyBody {
+            return "备忘录内容不能为空。"
+        }
+        return fallback
     }
 
     func checkForUpdates() {

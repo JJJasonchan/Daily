@@ -66,6 +66,7 @@ struct TodayView: View {
     @State private var undoDismissalTask: Task<Void, Never>?
     @State private var pendingFutureDeletion: DailyTask?
     @State private var pendingSwipeDeletion: DailyTask?
+    @State private var pendingUpcomingCancellation: DailyTask?
     @State private var quickAddText = ""
     @State private var isQuickAdding = false
     @FocusState private var isQuickAddFocused: Bool
@@ -108,7 +109,11 @@ struct TodayView: View {
                             completedSection
                         }
                     }
+                    if !model.upcomingTasks.isEmpty {
+                        upcomingSection
+                    }
                 }
+                .fluidRowHighlightScope(cornerRadius: TaskRow.cornerRadius)
                 .frame(maxWidth: 760)
                 .padding(.horizontal, 28)
                 .padding(.vertical, 26)
@@ -198,31 +203,98 @@ struct TodayView: View {
         }
     }
 
+    private var upcomingSection: some View {
+        let tasksByDay = Dictionary(grouping: model.upcomingTasks, by: \.dayKey)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("即将到来")
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+
+            ForEach(tasksByDay.keys.sorted(), id: \.self) { dayKey in
+                let date = LocalDay(rawValue: dayKey).date(in: .autoupdatingCurrent)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(date.formatted(.dateTime.year().month().day().weekday()))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    ForEach(tasksByDay[dayKey] ?? [], id: \.id) { task in
+                        HStack(spacing: 12) {
+                            Button {
+                                edit(task)
+                            } label: {
+                                Text(task.titleSnapshot)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(.plain)
+                            .help("编辑或改期")
+
+                            Menu {
+                                Button("编辑或改期") { edit(task) }
+                                Button("取消安排", role: .destructive) {
+                                    pendingUpcomingCancellation = task
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis.circle")
+                            }
+                            .menuStyle(.borderlessButton)
+                            .fixedSize()
+                            .accessibilityLabel("管理 \(task.titleSnapshot)")
+                        }
+                        .padding(.vertical, 5)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassModule(interactive: false, cornerRadius: 18)
+        .confirmationDialog(
+            "取消这项安排？",
+            isPresented: Binding(
+                get: { pendingUpcomingCancellation != nil },
+                set: { if !$0 { pendingUpcomingCancellation = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingUpcomingCancellation
+        ) { task in
+            Button("取消安排", role: .destructive) {
+                Task { @MainActor in await model.cancelUpcoming(task) }
+            }
+        } message: { task in
+            Text(task.titleSnapshot)
+        }
+    }
+
     private var header: some View {
         HStack(alignment: .center, spacing: 24) {
             dateBlock
 
             Spacer(minLength: 8)
 
-            VStack(spacing: -4) {
-                if isAllDone {
-                    Text("🎉")
-                        .font(.system(size: 18))
-                }
-                ProgressRing(
-                    fraction: effectiveCompletionFraction,
-                    size: 84,
-                    lineWidth: 8,
-                    completed: effectiveCompletedCount,
-                    total: model.todayTasks.count
+            TodayCompletionRing(
+                progress: todayCompletionProgress,
+                motion: motion
+            )
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .glassModule(interactive: false, cornerRadius: 18)
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            ColorTokens.accent.opacity(0.25),
+                            ColorTokens.accent.opacity(0.0)
+                        ],
+                        center: .topLeading,
+                        startRadius: 0,
+                        endRadius: 150
+                    )
                 )
-            }
-            .offset(y: 16)
-            .animation(motion.animation, value: effectiveCompletionFraction)
-            .animation(motion.animation, value: isAllDone)
         }
         .padding(.bottom, 4)
-        .padding(.trailing, 20)
     }
 
     private var dateBlock: some View {
@@ -231,7 +303,7 @@ struct TodayView: View {
                 .font(.caption.weight(.semibold))
                 .tracking(1.4)
                 .foregroundStyle(.secondary)
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
                 Text(dayNumberText)
                     .font(.system(size: 52, weight: .bold, design: .rounded))
                     .monospacedDigit()
@@ -242,7 +314,6 @@ struct TodayView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                .padding(.bottom, 7)
             }
         }
     }
@@ -333,13 +404,11 @@ struct TodayView: View {
         completionPresentation.visibleUndoToken(using: model)
     }
 
-    private var effectiveCompletionFraction: Double {
-        guard !model.todayTasks.isEmpty else { return 0 }
-        return Double(effectiveCompletedCount) / Double(model.todayTasks.count)
-    }
-
-    private var isAllDone: Bool {
-        !model.todayTasks.isEmpty && effectiveCompletionFraction >= 1
+    private var todayCompletionProgress: TodayCompletionProgress {
+        TodayCompletionProgress(
+            completed: effectiveCompletedCount,
+            total: model.todayTasks.count
+        )
     }
 
     private var weekdayText: String {
@@ -404,14 +473,12 @@ struct TodayView: View {
         }
     }
 
-    private func swipeDelete(_ task: DailyTask) {
+    private func swipeDelete(_ task: DailyTask) async {
         let isRecurring = model.templates.first { $0.id == task.templateID }?.kind == .recurring
         if isRecurring {
             pendingSwipeDeletion = task
         } else {
-            Task { @MainActor in
-                await model.delete(task, scope: .todayOnly)
-            }
+            await model.delete(task, scope: .todayOnly)
         }
     }
 

@@ -49,11 +49,13 @@ public enum NotificationID {
 
 @MainActor
 public final class NotificationService: NotificationScheduling {
-    private static let persistentRequestCount = 8
+    public nonisolated static let persistentRequestCount = 8
     private static let taskCategoryIdentifier = "TASK_REMINDER"
 
     private let center: any NotificationCenterClient
     private let calendar: Calendar
+    private var isMutating = false
+    private var waitingMutations: [CheckedContinuation<Void, Never>] = []
 
     public init(center: any NotificationCenterClient, calendar: Calendar = .current) {
         self.center = center
@@ -69,28 +71,66 @@ public final class NotificationService: NotificationScheduling {
     }
 
     public func sync(task: DailyTask, persistentIntervalMinutes: Int, now: Date) async throws {
-        await cancel(taskID: task.id)
-        guard task.completedAt == nil else { return }
-
-        switch task.reminderMode {
-        case .none:
-            return
-        case .once:
-            guard let nominalDate = nominalDate(for: task), nominalDate > now else {
-                return
-            }
-            try await addTaskRequest(
-                task: task,
-                sequence: 0,
-                trigger: calendarTrigger(at: nominalDate)
-            )
-        case .persistent:
-            try await schedulePersistent(task: task, intervalMinutes: persistentIntervalMinutes, now: now)
+        let taskID = task.id
+        let requests = taskRequests(
+            for: task, intervalMinutes: persistentIntervalMinutes, now: now
+        )
+        await beginMutation()
+        defer { endMutation() }
+        await removeRequests(withPrefix: taskPrefix(taskID))
+        for request in requests {
+            try await center.add(request)
         }
     }
 
     public func cancel(taskID: UUID) async {
-        let prefix = taskPrefix(taskID)
+        await beginMutation()
+        defer { endMutation() }
+        await removeRequests(withPrefix: taskPrefix(taskID))
+    }
+
+    public func syncDailyReminder(settings: AppSettings, now: Date) async throws {
+        let request = dailyReminderRequest(for: settings)
+        await beginMutation()
+        defer { endMutation() }
+        try await replaceDailyReminder(with: request)
+    }
+
+    public func rebuild(tasks: [DailyTask], settings: AppSettings, now: Date) async throws {
+        let todayKey = LocalDay(date: now, calendar: calendar).rawValue
+        let requests = tasks.filter { $0.dayKey >= todayKey }.flatMap { task in
+            taskRequests(for: task, intervalMinutes: settings.persistentIntervalMinutes, now: now)
+        }
+        let dailyRequest = dailyReminderRequest(for: settings)
+
+        await beginMutation()
+        defer { endMutation() }
+        await removeRequests(withPrefix: "task.")
+        for request in requests {
+            try await center.add(request)
+        }
+        try await replaceDailyReminder(with: dailyRequest)
+    }
+
+    // Notification center calls suspend. Keep each replacement atomic with
+    // respect to the other mutations submitted by the app.
+    private func beginMutation() async {
+        if !isMutating {
+            isMutating = true
+            return
+        }
+        await withCheckedContinuation { waitingMutations.append($0) }
+    }
+
+    private func endMutation() {
+        if waitingMutations.isEmpty {
+            isMutating = false
+        } else {
+            waitingMutations.removeFirst().resume()
+        }
+    }
+
+    private func removeRequests(withPrefix prefix: String) async {
         let ids = await center.pendingRequests()
             .map(\.identifier)
             .filter { $0.hasPrefix(prefix) }
@@ -99,8 +139,14 @@ public final class NotificationService: NotificationScheduling {
         }
     }
 
-    public func syncDailyReminder(settings: AppSettings, now: Date) async throws {
+    private func replaceDailyReminder(with request: UNNotificationRequest?) async throws {
         center.removePending(ids: [NotificationID.daily])
+        if let request {
+            try await center.add(request)
+        }
+    }
+
+    private func dailyReminderRequest(for settings: AppSettings) -> UNNotificationRequest? {
         guard
             settings.dailyReminderEnabled,
             let hour = settings.dailyReminderHour,
@@ -108,7 +154,7 @@ public final class NotificationService: NotificationScheduling {
             (0...23).contains(hour),
             (0...59).contains(minute)
         else {
-            return
+            return nil
         }
 
         let content = UNMutableNotificationContent()
@@ -122,61 +168,50 @@ public final class NotificationService: NotificationScheduling {
         components.hour = hour
         components.minute = minute
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
-        try await center.add(UNNotificationRequest(identifier: NotificationID.daily, content: content, trigger: trigger))
+        return UNNotificationRequest(identifier: NotificationID.daily, content: content, trigger: trigger)
     }
 
-    public func rebuild(tasks: [DailyTask], settings: AppSettings, now: Date) async throws {
-        let staleIDs = await center.pendingRequests()
-            .map(\.identifier)
-            .filter { $0.hasPrefix("task.") }
-        if !staleIDs.isEmpty {
-            center.removePending(ids: staleIDs)
-        }
+    private func taskRequests(
+        for task: DailyTask, intervalMinutes: Int, now: Date
+    ) -> [UNNotificationRequest] {
+        guard task.completedAt == nil, let nominalDate = nominalDate(for: task) else { return [] }
 
-        let todayKey = LocalDay(date: now, calendar: calendar).rawValue
-        for task in tasks where task.dayKey >= todayKey && task.completedAt == nil {
-            try await sync(task: task, persistentIntervalMinutes: settings.persistentIntervalMinutes, now: now)
-        }
-        try await syncDailyReminder(settings: settings, now: now)
-    }
-
-    private func schedulePersistent(task: DailyTask, intervalMinutes: Int, now: Date) async throws {
-        guard intervalMinutes > 0, let nominalDate = nominalDate(for: task) else { return }
-
-        let interval = TimeInterval(intervalMinutes * 60)
-        if nominalDate > now {
-            try await addTaskRequest(task: task, sequence: 0, trigger: calendarTrigger(at: nominalDate))
-            for sequence in 1..<Self.persistentRequestCount {
-                let delay = nominalDate.timeIntervalSince(now) + (TimeInterval(sequence) * interval)
-                try await addTaskRequest(
-                    task: task,
-                    sequence: sequence,
-                    trigger: UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false)
-                )
-            }
-        } else {
-            for sequence in 0..<Self.persistentRequestCount {
-                let delay = TimeInterval(sequence + 1) * interval
-                try await addTaskRequest(
-                    task: task,
-                    sequence: sequence,
-                    trigger: UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false)
+        switch task.reminderMode {
+        case .none:
+            return []
+        case .once:
+            guard nominalDate > now else { return [] }
+            return [taskRequest(task: task, sequence: 0, trigger: calendarTrigger(at: nominalDate, using: calendar))]
+        case .persistent:
+            guard intervalMinutes > 0 else { return [] }
+            let interval = TimeInterval(intervalMinutes) * 60
+            // UTC disambiguates an absolute time when the local hour repeats.
+            var triggerCalendar = Calendar(identifier: .gregorian)
+            triggerCalendar.timeZone = .gmt
+            return (0..<Self.persistentRequestCount).compactMap { sequence in
+                let date = nominalDate.addingTimeInterval(TimeInterval(sequence) * interval)
+                guard date > now, LocalDay(date: date, calendar: calendar).rawValue == task.dayKey else {
+                    return nil
+                }
+                return taskRequest(
+                    task: task, sequence: sequence, trigger: calendarTrigger(at: date, using: triggerCalendar)
                 )
             }
         }
     }
 
-    private func addTaskRequest(task: DailyTask, sequence: Int, trigger: UNNotificationTrigger) async throws {
+    private func taskRequest(
+        task: DailyTask, sequence: Int, trigger: UNNotificationTrigger
+    ) -> UNNotificationRequest {
         let content = UNMutableNotificationContent()
         content.title = task.titleSnapshot
         content.sound = .default
         content.categoryIdentifier = Self.taskCategoryIdentifier
-        let request = UNNotificationRequest(
+        return UNNotificationRequest(
             identifier: NotificationID.task(task.id, sequence: sequence),
             content: content,
             trigger: trigger
         )
-        try await center.add(request)
     }
 
     private func nominalDate(for task: DailyTask) -> Date? {
@@ -202,7 +237,7 @@ public final class NotificationService: NotificationScheduling {
         return calendar.date(from: components)
     }
 
-    private func calendarTrigger(at date: Date) -> UNCalendarNotificationTrigger {
+    private func calendarTrigger(at date: Date, using calendar: Calendar) -> UNCalendarNotificationTrigger {
         var components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
         components.calendar = calendar
         components.timeZone = calendar.timeZone

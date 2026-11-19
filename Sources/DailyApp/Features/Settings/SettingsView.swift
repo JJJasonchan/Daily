@@ -37,12 +37,12 @@ struct SettingsView: View {
     @Bindable var model: AppModel
 
     @State private var presentation = SettingsPresentationState()
-    @State private var isSaving = false
+    @State private var reminderPersistTask: Task<Void, Never>?
 
     var body: some View {
         Form {
             Section("🎨 外观") {
-                Picker("颜色模式", selection: $presentation.colorSchemeMode) {
+                Picker("颜色模式", selection: colorSchemeBinding) {
                     ForEach(ColorSchemeMode.allCases, id: \.self) { mode in
                         Text(mode.displayName).tag(mode)
                     }
@@ -51,7 +51,7 @@ struct SettingsView: View {
             }
 
             Section("🔔 每日提醒") {
-                Toggle("启用每日提醒", isOn: $presentation.dailyReminderEnabled)
+                Toggle("启用每日提醒", isOn: reminderEnabledBinding)
 
                 if presentation.dailyReminderEnabled {
                     DatePicker(
@@ -59,16 +59,19 @@ struct SettingsView: View {
                         selection: $presentation.dailyReminderTime,
                         displayedComponents: .hourAndMinute
                     )
+                    .onChange(of: presentation.dailyReminderTime) { _, _ in
+                        scheduleReminderPersist()
+                    }
                 }
             }
 
-            Section("⏰ 持续提醒") {
-                Picker("重复间隔", selection: $presentation.persistentIntervalMinutes) {
+            Section("⏰ 重复提醒") {
+                Picker("重复间隔", selection: persistentIntervalBinding) {
                     ForEach(SettingsPresentationState.intervalChoices, id: \.self) { minutes in
                         Text("\(minutes) 分钟").tag(minutes)
                     }
                 }
-                Text("用于任务选择“持续提醒”时的再次提醒间隔。")
+                Text("从任务设定的提醒时间起计算，任务当天最多提醒 \(NotificationService.persistentRequestCount) 次。已过的时刻会跳过，完成后停止提醒。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -106,14 +109,6 @@ struct SettingsView: View {
                 }
             }
 
-            Section {
-                HStack {
-                    Spacer()
-                    Button("保存设置", action: save)
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(isSaving)
-                }
-            }
         }
         .formStyle(.grouped)
         .frame(maxWidth: 680)
@@ -148,23 +143,58 @@ struct SettingsView: View {
         }
     }
 
-    private func save() {
-        guard !isSaving else { return }
-        isSaving = true
+    private var colorSchemeBinding: Binding<ColorSchemeMode> {
+        Binding(
+            get: { presentation.colorSchemeMode },
+            set: { newValue in
+                presentation.colorSchemeMode = newValue
+                model.saveColorSchemeMode(newValue)
+            }
+        )
+    }
+
+    private var reminderEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { presentation.dailyReminderEnabled },
+            set: { newValue in
+                presentation.dailyReminderEnabled = newValue
+                persistReminderSettings()
+            }
+        )
+    }
+
+    private var persistentIntervalBinding: Binding<Int> {
+        Binding(
+            get: { presentation.persistentIntervalMinutes },
+            set: { newValue in
+                presentation.persistentIntervalMinutes = newValue
+                persistReminderSettings()
+            }
+        )
+    }
+
+    private func persistReminderSettings() {
         let components = Calendar.autoupdatingCurrent.dateComponents(
             [.hour, .minute],
             from: presentation.dailyReminderTime
         )
-
+        let enabled = presentation.dailyReminderEnabled
         Task { @MainActor in
             _ = await model.saveReminderSettings(
-                enabled: presentation.dailyReminderEnabled,
-                hour: presentation.dailyReminderEnabled ? components.hour : nil,
-                minute: presentation.dailyReminderEnabled ? components.minute : nil,
+                enabled: enabled,
+                hour: enabled ? components.hour : nil,
+                minute: enabled ? components.minute : nil,
                 persistentIntervalMinutes: presentation.persistentIntervalMinutes
             )
-            model.saveColorSchemeMode(presentation.colorSchemeMode)
-            isSaving = false
+        }
+    }
+
+    private func scheduleReminderPersist() {
+        reminderPersistTask?.cancel()
+        reminderPersistTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            persistReminderSettings()
         }
     }
 }

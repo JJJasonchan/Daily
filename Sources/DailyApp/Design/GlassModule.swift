@@ -8,6 +8,8 @@ struct GlassModule: ViewModifier {
 
     var interactive = true
     var tint: Color?
+    var surfaceTint: Color?
+    var surfaceOpacity: Double = 0.76
     var cornerRadius: CGFloat = 16
 
     private var shape: RoundedRectangle {
@@ -28,6 +30,11 @@ struct GlassModule: ViewModifier {
                 )
         } else {
             content
+                .background {
+                    if let surfaceTint {
+                        shape.fill(surfaceTint.opacity(surfaceOpacity))
+                    }
+                }
                 .glassEffect(
                     Glass.regular
                         .tint(tint)
@@ -57,12 +64,16 @@ extension View {
     func glassModule(
         interactive: Bool = true,
         tint: Color? = nil,
+        surfaceTint: Color? = nil,
+        surfaceOpacity: Double = 0.76,
         cornerRadius: CGFloat = 16
     ) -> some View {
         modifier(
             GlassModule(
                 interactive: interactive,
                 tint: tint,
+                surfaceTint: surfaceTint,
+                surfaceOpacity: surfaceOpacity,
                 cornerRadius: cornerRadius
             )
         )

@@ -15,17 +15,78 @@ struct MenuBarActions {
     }
 }
 
+enum MenuBarListProjection {
+    /// 单行最小高度，与 taskRow 的 frame(minHeight:) 保持一致。
+    static let rowMinHeight: CGFloat = 46
+    static let rowSpacing: CGFloat = 8
+    static let listVerticalPadding: CGFloat = 10
+    /// 列表最大高度；超出后改为滚动，避免面板长过屏幕。
+    static let maxListHeight: CGFloat = 330
+
+    static func remainingTasks(
+        in tasks: [DailyTask],
+        isCompleted: (DailyTask) -> Bool
+    ) -> [DailyTask] {
+        tasks.filter { !isCompleted($0) }
+    }
+
+    /// MenuBarExtra(.window) 会把窗口高度贴合内容，而 ScrollView 没有固有高度：
+    /// 不给确定高度时整块列表会被压成 0，看起来就像"任务不见了"。
+    static func listHeight(forRowCount count: Int) -> CGFloat {
+        guard count > 0 else { return 0 }
+        let rows = CGFloat(count) * rowMinHeight
+        let gaps = CGFloat(count - 1) * rowSpacing
+        return min(rows + gaps + listVerticalPadding * 2, maxListHeight)
+    }
+
+    static func isScrollable(forRowCount count: Int) -> Bool {
+        count > 0 && listHeight(forRowCount: count) >= maxListHeight
+    }
+}
+
+enum MenuBarStatusProjection {
+    /// pendingTarget 用于乐观更新：点击勾选后立刻反映，不等落库。
+    static func completedCount(
+        in tasks: [DailyTask],
+        pendingTarget: (UUID) -> Bool? = { _ in nil }
+    ) -> Int {
+        var count = 0
+        for task in tasks {
+            if pendingTarget(task.id) ?? (task.completedAt != nil) {
+                count += 1
+            }
+        }
+        return count
+    }
+
+    /// 状态栏只显示图标，不显示任何数字或文字。
+    static func systemImage(completed: Int, total: Int) -> String {
+        guard total > 0, completed >= total else { return "checklist" }
+        return "checkmark.circle.fill"
+    }
+
+    static func accessibilityLabel(completed: Int, total: Int) -> String {
+        guard total > 0 else { return "Daily，今天还没有任务" }
+        return "Daily，已完成 \(completed) 项，共 \(total) 项"
+    }
+}
+
 struct MenuBarStatusLabel: View {
     @Bindable var model: AppModel
 
+    private var total: Int { model.todayTasks.count }
+    private var completed: Int {
+        MenuBarStatusProjection.completedCount(
+            in: model.todayTasks,
+            pendingTarget: { model.pendingCompletionTarget(taskID: $0) }
+        )
+    }
+
     var body: some View {
-        Label(
-            "Daily \(model.completedCount)/\(model.todayTasks.count)",
-            systemImage: "checklist"
-        )
-        .accessibilityLabel(
-            "Daily，已完成 \(model.completedCount) 项，共 \(model.todayTasks.count) 项"
-        )
+        Image(systemName: MenuBarStatusProjection.systemImage(completed: completed, total: total))
+            .accessibilityLabel(
+                MenuBarStatusProjection.accessibilityLabel(completed: completed, total: total)
+            )
     }
 }
 
@@ -38,6 +99,7 @@ struct MenuBarContentView: View {
     @State private var quickAddTitle = ""
     @State private var isAdding = false
     @State private var isUndoing = false
+    @State private var showCompleted = false
     @State private var undoDismissalTask: Task<Void, Never>?
 
     private var motion: MotionSpec {
@@ -50,17 +112,17 @@ struct MenuBarContentView: View {
 
             if model.todayTasks.isEmpty {
                 emptyState
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(model.todayTasks) { task in
-                            taskRow(task)
-                        }
-                    }
-                    .padding(10)
-                    .glassModule(interactive: false, cornerRadius: 18)
+            } else if remainingTasks.isEmpty {
+                allDoneState
+                if !completedTasks.isEmpty {
+                    completedSection
                 }
-                .frame(maxHeight: 330)
+            } else {
+                remainingList
+
+                if !completedTasks.isEmpty {
+                    completedSection
+                }
             }
 
             quickAdd
@@ -79,6 +141,17 @@ struct MenuBarContentView: View {
             }
 
             Button {
+                showQuickMemoWindow()
+            } label: {
+                Label("记录备忘录", systemImage: "square.and.pencil")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderless)
+            .frame(height: 38)
+            .glassModule(interactive: true, cornerRadius: 13)
+            .accessibilityHint("打开快速备忘录")
+
+            Button {
                 openWindow(id: "main")
                 NSApp.activate(ignoringOtherApps: true)
             } label: {
@@ -92,6 +165,7 @@ struct MenuBarContentView: View {
         }
 
         .preferredColorScheme(model.colorSchemeMode.swiftUIColorScheme)
+        .tint(ColorTokens.accent)
         .padding(14)
         .frame(width: 360)
         .onDisappear {
@@ -145,6 +219,98 @@ struct MenuBarContentView: View {
         .accessibilityElement(children: .combine)
     }
 
+    private var allDoneState: some View {
+        VStack(spacing: 7) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 25, weight: .light))
+                .foregroundStyle(ColorTokens.accent)
+            Text("今天全部完成")
+                .font(.headline)
+            Text("干得漂亮！")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 22)
+        .glassModule(interactive: false, cornerRadius: 16)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var remainingTasks: [DailyTask] {
+        MenuBarListProjection.remainingTasks(
+            in: model.todayTasks,
+            isCompleted: { effectiveCompletion($0) }
+        )
+    }
+
+    private var completedTasks: [DailyTask] {
+        model.todayTasks.filter { effectiveCompletion($0) }
+    }
+
+    /// 未完成列表。高度必须显式给定：MenuBarExtra(.window) 会贴合内容，
+    /// 而 ScrollView 没有固有高度，只写 maxHeight 会被压成 0 条。
+    private var remainingList: some View {
+        let height = MenuBarListProjection.listHeight(forRowCount: remainingTasks.count)
+        return ScrollView {
+            LazyVStack(spacing: MenuBarListProjection.rowSpacing) {
+                ForEach(remainingTasks) { task in
+                    taskRow(task)
+                }
+            }
+            .padding(MenuBarListProjection.listVerticalPadding)
+            .glassModule(interactive: false, cornerRadius: 18)
+        }
+        .scrollDisabled(!MenuBarListProjection.isScrollable(forRowCount: remainingTasks.count))
+        .frame(height: height)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("未完成任务，共 \(remainingTasks.count) 项")
+    }
+
+    private var completedSection: some View {
+        VStack(spacing: 6) {
+            Button {
+                withAnimation(motion.animation) {
+                    showCompleted.toggle()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: showCompleted ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                    Text("已完成 \(completedTasks.count)")
+                        .font(.caption.weight(.semibold))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .frame(height: 22)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("已完成 \(completedTasks.count) 项")
+            .accessibilityHint(showCompleted ? "收起已完成任务" : "展开已完成任务")
+
+            if showCompleted {
+                ScrollView {
+                    LazyVStack(spacing: MenuBarListProjection.rowSpacing) {
+                        ForEach(completedTasks) { task in
+                            taskRow(task)
+                        }
+                    }
+                    .padding(MenuBarListProjection.listVerticalPadding)
+                    .glassModule(interactive: false, cornerRadius: 16)
+                }
+                .frame(
+                    height: min(
+                        MenuBarListProjection.listHeight(forRowCount: completedTasks.count),
+                        MenuBarListProjection.maxListHeight
+                    )
+                )
+                .transition(.opacity)
+            }
+        }
+        .padding(.top, 2)
+    }
+
     private func taskRow(_ task: DailyTask) -> some View {
         let completed = effectiveCompletion(task)
         return Button {
@@ -153,7 +319,9 @@ struct MenuBarContentView: View {
             HStack(spacing: 11) {
                 Image(systemName: completed ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(completed ? ColorTokens.checkboxComplete : ColorTokens.checkboxIncomplete)
                     .contentTransition(.symbolEffect(.replace))
+                    .symbolEffect(.bounce, value: completed)
 
                 Text(task.titleSnapshot)
                     .font(.body.weight(.medium))
@@ -165,7 +333,7 @@ struct MenuBarContentView: View {
             }
             .contentShape(Rectangle())
             .padding(.horizontal, 13)
-            .frame(minHeight: 46)
+            .frame(minHeight: MenuBarListProjection.rowMinHeight)
         }
         .buttonStyle(.plain)
         .background {

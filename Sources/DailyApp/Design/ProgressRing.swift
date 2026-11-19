@@ -22,12 +22,18 @@ struct ProgressRing: View {
     // MARK: - Mini (sidebar)
 
     private var miniView: some View {
-        Text("\(completed)/\(total)")
-            .font(.system(size: size * 0.38, weight: .semibold, design: .rounded))
-            .monospacedDigit()
-            .foregroundStyle(.primary)
-            .frame(width: size, height: size)
-            .accessibilityLabel("进度 \(completed) / \(total)")
+        ZStack {
+            Circle()
+                .stroke(Color.primary.opacity(0.10), lineWidth: lineWidth)
+            Circle()
+                .trim(from: 0, to: min(max(fraction, 0), 1))
+                .stroke(tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: size, height: size)
+        .animation(.easeOut(duration: 0.4), value: fraction)
+        .accessibilityLabel("进度 \(completed) / \(total)")
+        .accessibilityValue("已完成 \(completed) 项，共 \(total) 项")
     }
 
     // MARK: - Empty

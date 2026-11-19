@@ -1,33 +1,22 @@
 import DailyCore
 import SwiftUI
 
-enum TaskEditorRecurrenceStartDay {
-    static func resolve(
-        template: TaskTemplate?,
-        currentDay: LocalDay
-    ) -> LocalDay {
-        template?.recurrence?.startDay ?? currentDay
+extension TaskPriority {
+    var displayName: String {
+        switch self {
+        case .low: "低"
+        case .medium: "中"
+        case .high: "高"
+        }
     }
 }
 
-struct TaskEditorScheduleState: Equatable {
-    let day: LocalDay?
-    let isExplicit: Bool
-
-    static func resolve(
-        task: DailyTask?,
-        template: TaskTemplate?
-    ) -> TaskEditorScheduleState {
-        if let scheduledDayKey = task?.scheduledDayKey {
-            return TaskEditorScheduleState(
-                day: LocalDay(rawValue: scheduledDayKey),
-                isExplicit: true
-            )
-        }
+enum TaskEditorScheduleState {
+    static func initialDay(task: DailyTask?, template: TaskTemplate?, today: LocalDay) -> LocalDay {
         if template?.kind == .recurring, let startDay = template?.recurrence?.startDay {
-            return TaskEditorScheduleState(day: startDay, isExplicit: true)
+            return startDay
         }
-        return TaskEditorScheduleState(day: nil, isExplicit: false)
+        return task.map { LocalDay(rawValue: $0.dayKey) } ?? today
     }
 }
 
@@ -55,7 +44,6 @@ enum TaskEditorMode: Equatable {
         }
     }
 
-    var showsTaskType: Bool { self != .orphanInstance }
     var showsRecurrence: Bool { self != .orphanInstance }
 }
 
@@ -66,21 +54,29 @@ struct TaskEditorView: View {
     let task: DailyTask?
     let template: TaskTemplate?
     let mode: TaskEditorMode
+    let editsRecurringRule: Bool
+    private let startsRecurring: Bool
 
     @State private var title: String
+    @State private var priority: TaskPriority?
+    @State private var assignee: String
     @State private var kind: TaskKind
     @State private var recurrenceFrequency: RecurrenceFrequency
     @State private var selectedWeekdays: Set<Int>
-    @State private var dayOfMonth: Int
-    @State private var recurrenceStartDay: LocalDay
-    @State private var scheduledDate: Date?
-    @State private var hasScheduledDate: Bool
+    @State private var dayOfMonth: Int?
+    @State private var scheduledDate: Date
+    @State private var customDate: Date
+    @State private var showsDatePicker = false
     @State private var reminderMode: ReminderMode
     @State private var reminderTime: Date
     @State private var isSaving = false
 
     init(model: AppModel, task: DailyTask? = nil) {
         self.init(model: model, task: task, template: nil)
+    }
+
+    init(model: AppModel, startsRecurring: Bool) {
+        self.init(model: model, task: nil, template: nil, startsRecurring: startsRecurring)
     }
 
     init(model: AppModel, template: TaskTemplate) {
@@ -90,9 +86,11 @@ struct TaskEditorView: View {
     private init(
         model: AppModel,
         task: DailyTask?,
-        template: TaskTemplate?
+        template: TaskTemplate?,
+        startsRecurring: Bool = false
     ) {
         self.model = model
+        self.startsRecurring = startsRecurring
         self.task = task
         self.template = template
 
@@ -100,11 +98,8 @@ struct TaskEditorView: View {
             model.editorTemplate(for: item)
         }
         mode = TaskEditorMode.resolve(task: task, template: resolvedTemplate)
+        editsRecurringRule = resolvedTemplate?.kind == .recurring
         let recurrence = resolvedTemplate?.recurrence
-        let scheduleState = TaskEditorScheduleState.resolve(
-            task: task,
-            template: resolvedTemplate
-        )
         let hour = task?.reminderHour ?? resolvedTemplate?.reminderHour ?? 9
         let minute = task?.reminderMinute ?? resolvedTemplate?.reminderMinute ?? 0
         let time = Calendar.autoupdatingCurrent.date(
@@ -112,25 +107,18 @@ struct TaskEditorView: View {
         ) ?? .now
 
         _title = State(initialValue: task?.titleSnapshot ?? resolvedTemplate?.title ?? "")
-        _kind = State(initialValue: resolvedTemplate?.kind ?? .once)
+        _priority = State(initialValue: task == nil ? resolvedTemplate?.priority : task?.priority)
+        _assignee = State(initialValue: (task == nil ? resolvedTemplate?.assignee : task?.assignee) ?? "")
+        _kind = State(initialValue: resolvedTemplate?.kind ?? (startsRecurring ? .recurring : .once))
         _recurrenceFrequency = State(initialValue: recurrence?.frequency ?? .daily)
         _selectedWeekdays = State(initialValue: recurrence?.weekdays ?? [])
-        _dayOfMonth = State(initialValue: recurrence?.dayOfMonth ?? 1)
-        _recurrenceStartDay = State(
-            initialValue: TaskEditorRecurrenceStartDay.resolve(
-                template: resolvedTemplate,
-                currentDay: model.currentDay
-            )
+        _dayOfMonth = State(initialValue: recurrence?.dayOfMonth)
+        let calendar = Calendar.autoupdatingCurrent
+        let initialDay = TaskEditorScheduleState.initialDay(
+            task: task, template: resolvedTemplate, today: model.currentDay
         )
-        if let scheduledDay = scheduleState.day {
-            _scheduledDate = State(
-                initialValue: scheduledDay.date(in: Calendar.autoupdatingCurrent)
-            )
-            _hasScheduledDate = State(initialValue: scheduleState.isExplicit)
-        } else {
-            _scheduledDate = State(initialValue: nil)
-            _hasScheduledDate = State(initialValue: false)
-        }
+        _scheduledDate = State(initialValue: initialDay.date(in: calendar))
+        _customDate = State(initialValue: max(initialDay, model.currentDay).date(in: calendar))
         _reminderMode = State(
             initialValue: task?.reminderMode ?? resolvedTemplate?.reminderMode ?? .none
         )
@@ -140,7 +128,7 @@ struct TaskEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(mode.title)
+                Text(editorTitle)
                     .font(.title2.weight(.semibold))
                 Spacer()
                 Button {
@@ -155,69 +143,57 @@ struct TaskEditorView: View {
 
             Divider()
 
+            VStack(alignment: .leading, spacing: 8) {
+                Text("名称")
+                    .font(.subheadline.weight(.semibold))
+                    .accessibilityHidden(true)
+                TextField("要做什么？", text: $title)
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity)
+                    .accessibilityLabel("名称")
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 18)
+
             Form {
-                TextField("任务标题", text: $title)
-                    .accessibilityLabel("任务标题")
-
-                if mode.showsTaskType {
-                    Picker("任务类型", selection: $kind) {
-                        Text("仅今天").tag(TaskKind.once)
-                        Text("重复").tag(TaskKind.recurring)
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                Section("计划日期") {
-                    Toggle("指定日期执行", isOn: $hasScheduledDate)
-                    if hasScheduledDate {
-                        DatePicker(
-                            "执行日期",
-                            selection: Binding(
-                                get: { scheduledDate ?? Date() },
-                                set: { scheduledDate = $0 }
-                            ),
-                            displayedComponents: .date
-                        )
-                        Text(kind == .recurring
-                            ? "重复任务将从此日期开始生效。"
-                            : "单次任务将仅在此日期出现在今日列表中。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if mode.showsRecurrence && kind == .recurring {
-                    Section("重复规则") {
-                        Picker("频率", selection: $recurrenceFrequency) {
-                            Text("每天").tag(RecurrenceFrequency.daily)
-                            Text("工作日").tag(RecurrenceFrequency.weekdays)
-                            Text("固定星期").tag(RecurrenceFrequency.selectedWeekdays)
-                            Text("每月").tag(RecurrenceFrequency.monthly)
+                Section {
+                    Picker("优先级", selection: $priority) {
+                        Text("未设置").tag(nil as TaskPriority?)
+                        ForEach(TaskPriority.allCases.reversed(), id: \.self) { priority in
+                            Text(priority.displayName).tag(Optional(priority))
                         }
+                    }
+                    TextField("负责人", text: $assignee)
+                }
 
-                        if recurrenceFrequency == .selectedWeekdays {
-                            Text("选择重复的星期：")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                if mode.showsRecurrence {
+                    Section {
+                        dateMenu
+                        Picker("重复", selection: repetition) {
+                            if !startsRecurring {
+                                Text("不重复").tag(nil as RecurrenceFrequency?)
+                            }
+                            Text("每天").tag(Optional(RecurrenceFrequency.daily))
+                            Text("工作日").tag(Optional(RecurrenceFrequency.weekdays))
+                            Text("指定星期").tag(Optional(RecurrenceFrequency.selectedWeekdays))
+                            Text("每月").tag(Optional(RecurrenceFrequency.monthly))
+                        }
+                        if kind == .recurring && recurrenceFrequency == .selectedWeekdays {
                             weekdayPicker
                         }
-
-                        if recurrenceFrequency == .monthly {
-                            HStack {
-                                Text("日期")
-                                Spacer()
-                                Picker("日期", selection: $dayOfMonth) {
-                                    ForEach(1..<29) { day in
-                                        Text("\(day) 日").tag(day)
-                                    }
-                                    Text("月末最后一天").tag(31)
+                        if kind == .recurring && recurrenceFrequency == .monthly {
+                            Picker("每月日期", selection: $dayOfMonth) {
+                                Text("月末最后一天").tag(nil as Int?)
+                                ForEach(1...31, id: \.self) { day in
+                                    Text("\(day) 日").tag(Optional(day))
                                 }
-                                .labelsHidden()
-                                .pickerStyle(.menu)
                             }
-                            Text("如当月无该日期（如 31 日），自动取月末最后一天。")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            if let dayOfMonth, dayOfMonth > 28 {
+                                Text("当月没有所选日期时，在月末执行。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
@@ -226,7 +202,7 @@ struct TaskEditorView: View {
                     Picker("提醒方式", selection: $reminderMode) {
                         Text("不提醒").tag(ReminderMode.none)
                         Text("提醒一次").tag(ReminderMode.once)
-                        Text("持续提醒").tag(ReminderMode.persistent)
+                        Text("重复提醒").tag(ReminderMode.persistent)
                     }
 
                     if reminderMode != .none {
@@ -235,6 +211,11 @@ struct TaskEditorView: View {
                             selection: $reminderTime,
                             displayedComponents: .hourAndMinute
                         )
+                    }
+                    if reminderMode == .persistent {
+                        Text("从设定时间起每隔 \(model.persistentIntervalMinutes) 分钟提醒，任务当天最多 \(NotificationService.persistentRequestCount) 次。完成后停止。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -257,9 +238,69 @@ struct TaskEditorView: View {
         }
         .frame(
             width: 500,
-            height: mode.showsRecurrence && kind == .recurring ? 640 : 500
+            height: 500
         )
+        .tint(ColorTokens.accent)
         .accessibilityElement(children: .contain)
+    }
+
+    private var editorTitle: String {
+        if startsRecurring { return "新建重复任务" }
+        return editsRecurringRule ? "编辑重复规则" : mode.title
+    }
+
+    private var repetition: Binding<RecurrenceFrequency?> {
+        Binding(
+            get: { kind == .recurring ? recurrenceFrequency : nil },
+            set: { value in
+                if let value {
+                    kind = .recurring
+                    recurrenceFrequency = value
+                } else {
+                    kind = .once
+                    scheduledDate = max(scheduledDate, todayDate)
+                }
+            }
+        )
+    }
+
+    private var todayDate: Date {
+        model.currentDay.date(in: .autoupdatingCurrent)
+    }
+
+    private var dateMenu: some View {
+        let calendar = Calendar.autoupdatingCurrent
+        let tomorrow = model.currentDay.adding(days: 1, calendar: calendar).date(in: calendar)
+        let label = kind == .recurring ? "开始日期" : "安排日期"
+        let formattedDate = scheduledDate == todayDate ? "今天"
+            : scheduledDate == tomorrow ? "明天"
+            : scheduledDate.formatted(.dateTime.year().month().day())
+
+        return LabeledContent(label) {
+            Menu(formattedDate) {
+                Button("今天") { scheduledDate = todayDate }
+                Button("明天") { scheduledDate = tomorrow }
+                Button("选择日期…") {
+                    customDate = max(scheduledDate, todayDate)
+                    showsDatePicker = true
+                }
+            }
+            .accessibilityLabel(label)
+            .accessibilityValue(formattedDate)
+            .popover(isPresented: $showsDatePicker) {
+                VStack {
+                    DatePicker(label, selection: $customDate, in: todayDate..., displayedComponents: .date)
+                        .datePickerStyle(.graphical)
+                    Button("确定") {
+                        scheduledDate = customDate
+                        showsDatePicker = false
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+                .padding()
+                .frame(width: 285)
+            }
+        }
     }
 
     private var weekdayPicker: some View {
@@ -326,18 +367,13 @@ struct TaskEditorView: View {
     private func makeDraft() -> TaskDraft {
         let calendar = Calendar.autoupdatingCurrent
         let components = calendar.dateComponents([.hour, .minute], from: reminderTime)
-        let effectiveDayOfMonth = recurrenceFrequency == .monthly
-            ? (dayOfMonth == 31 ? nil : dayOfMonth)
-            : nil
-        let scheduledDayValue: LocalDay? = hasScheduledDate && scheduledDate != nil
-            ? LocalDay(date: scheduledDate!, calendar: calendar)
-            : nil
+        let scheduledDay = LocalDay(date: scheduledDate, calendar: calendar)
         let recurrence = kind == .recurring
             ? RecurrenceRule(
                 frequency: recurrenceFrequency,
                 weekdays: recurrenceFrequency == .selectedWeekdays ? selectedWeekdays : [],
-                dayOfMonth: effectiveDayOfMonth,
-                startDay: scheduledDayValue ?? recurrenceStartDay
+                dayOfMonth: recurrenceFrequency == .monthly ? dayOfMonth : nil,
+                startDay: scheduledDay
             )
             : nil
 
@@ -345,10 +381,12 @@ struct TaskEditorView: View {
             title: title,
             kind: kind,
             recurrence: recurrence,
-            scheduledDay: scheduledDayValue,
+            scheduledDay: kind == .once ? scheduledDay : nil,
             reminderMode: reminderMode,
             reminderHour: reminderMode == .none ? nil : components.hour,
-            reminderMinute: reminderMode == .none ? nil : components.minute
+            reminderMinute: reminderMode == .none ? nil : components.minute,
+            priority: priority,
+            assignee: assignee
         )
     }
 
@@ -361,7 +399,9 @@ struct TaskEditorView: View {
             title: title,
             reminderMode: reminderMode,
             reminderHour: reminderMode == .none ? nil : components.hour,
-            reminderMinute: reminderMode == .none ? nil : components.minute
+            reminderMinute: reminderMode == .none ? nil : components.minute,
+            priority: priority,
+            assignee: assignee
         )
     }
 }
@@ -373,7 +413,7 @@ private struct ConditionalProminentButtonStyle: PrimitiveButtonStyle {
         if isProminent {
             Button(configuration)
                 .buttonStyle(.borderedProminent)
-                .tint(.primary)
+                .tint(ColorTokens.accent)
         } else {
             Button(configuration)
                 .buttonStyle(.bordered)

@@ -17,6 +17,8 @@ public final class DailyTask {
     public var rolloverCount: Int
     public var createdAt: Date
     public var scheduledDayKey: String?
+    private var priorityRaw: String?
+    public var assignee: String?
 
     public init(
         id: UUID = UUID(),
@@ -32,7 +34,9 @@ public final class DailyTask {
         originalDayKey: String? = nil,
         rolloverCount: Int = 0,
         createdAt: Date = .now,
-        scheduledDayKey: String? = nil
+        scheduledDayKey: String? = nil,
+        priority: TaskPriority? = nil,
+        assignee: String? = nil
     ) {
         self.id = id
         self.templateID = templateID
@@ -48,10 +52,17 @@ public final class DailyTask {
         self.rolloverCount = rolloverCount
         self.createdAt = createdAt
         self.scheduledDayKey = scheduledDayKey
+        self.priorityRaw = priority?.rawValue
+        self.assignee = assignee
     }
 
     public var reminderMode: ReminderMode {
         get { ReminderMode(rawValue: reminderModeRaw)! }
         set { reminderModeRaw = newValue.rawValue }
+    }
+
+    public var priority: TaskPriority? {
+        get { priorityRaw.flatMap(TaskPriority.init(rawValue:)) }
+        set { priorityRaw = newValue?.rawValue }
     }
 }

@@ -44,23 +44,58 @@ struct RulesView: View {
     var body: some View {
         Group {
             if model.templates.isEmpty {
-                ContentUnavailableView(
-                    "没有重复规则",
-                    systemImage: "repeat",
-                    description: Text("在今日页面新建重复任务后，可在这里统一管理。")
-                )
+                emptyState
             } else {
-                List {
-                    Section("重复任务") {
+                ScrollView {
+                    VStack(spacing: 10) {
                         ForEach(model.templates) { template in
                             ruleRow(template)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 6)
+                                .glassModule(interactive: false, cornerRadius: 14)
                         }
                     }
+                    .frame(maxWidth: 760)
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 26)
+                    .frame(maxWidth: .infinity)
                 }
-                .listStyle(.inset)
             }
         }
         .navigationTitle("重复规则")
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 0) {
+            Image(systemName: "repeat")
+                .font(.system(size: 24, weight: .medium))
+                .foregroundStyle(ColorTokens.accent)
+                .frame(width: 60, height: 60)
+                .background(ColorTokens.accentSoft, in: RoundedRectangle(cornerRadius: 18))
+                .accessibilityHidden(true)
+                .padding(.bottom, 14)
+
+            Text("还没有重复规则")
+                .font(.title3.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
+
+            Text("任务会按设定的频率自动生成。")
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.top, 4)
+
+            Button {
+                model.isPresentingNewRecurringTask = true
+            } label: {
+                Label("新建重复任务", systemImage: "plus")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .padding(.top, 18)
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func ruleRow(_ template: TaskTemplate) -> some View {
@@ -113,7 +148,11 @@ struct RulesView: View {
                 "启用 \(template.title)",
                 isOn: Binding(
                     get: { template.isEnabled },
-                    set: { _ = model.setTemplateEnabled(template, enabled: $0) }
+                    set: { enabled in
+                        Task { @MainActor in
+                            await model.setTemplateEnabled(template, enabled: enabled)
+                        }
+                    }
                 )
             )
             .labelsHidden()
@@ -123,7 +162,7 @@ struct RulesView: View {
                     model.editorTemplateID = template.id
                 }
                 Button("删除规则", role: .destructive) {
-                    _ = model.deleteTemplate(template)
+                    Task { @MainActor in await model.deleteTemplate(template) }
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
@@ -132,12 +171,15 @@ struct RulesView: View {
             .fixedSize()
             .accessibilityLabel("管理 \(template.title)")
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 4)
         .opacity(template.isEnabled ? 1 : 0.72)
-        .background(
+        .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.primary.opacity(dropTargetID == template.id ? 0.08 : 0))
-        )
+                .strokeBorder(
+                    ColorTokens.accent.opacity(dropTargetID == template.id ? 0.65 : 0),
+                    lineWidth: 1.5
+                )
+        }
         .animation(motion.animation, value: dropTargetID)
         .dropDestination(for: String.self) { values, _ in
             guard let value = values.first,

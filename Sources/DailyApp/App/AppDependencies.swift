@@ -84,9 +84,12 @@ final class AppDependencies {
                 for: TaskTemplate.self,
                 DailyTask.self,
                 AppSettings.self,
+                Memo.self,
                 configurations: configuration
             )
             let repository = SwiftDataTaskRepository(context: modelContainer.mainContext)
+            let memoRepository = SwiftDataMemoRepository(context: modelContainer.mainContext)
+            let memoService = MemoService(repository: memoRepository)
             let dayProvider = SystemDayProvider()
             let notificationService = NotificationService(
                 center: UserNotificationCenterClient(),
@@ -111,6 +114,7 @@ final class AppDependencies {
                 rolloverService: rolloverService,
                 reminderSettingsService: reminderSettingsService,
                 repository: repository,
+                memoService: memoService,
                 dayProvider: dayProvider,
                 notificationService: notificationService,
                 lifetimeAnchor: modelContainer,

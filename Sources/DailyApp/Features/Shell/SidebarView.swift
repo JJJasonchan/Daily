@@ -1,35 +1,66 @@
 import SwiftUI
 
 struct SidebarView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
     @Bindable var model: AppModel
+    let wallpaperPalette: WallpaperPalette
     @State private var hoveredDestination: AppModel.Destination?
+    @FocusState private var focusedDestination: AppModel.Destination?
+
+    private let destinations: [AppModel.Destination] = [.today, .rules, .history, .memo, .settings]
 
     var body: some View {
         VStack(spacing: 2) {
-            destinationRow("今日", systemImage: "checkmark.circle", value: .today)
-            destinationRow("重复规则", systemImage: "repeat", value: .rules)
-            destinationRow("历史记录", systemImage: "clock.arrow.circlepath", value: .history)
+            destinationRow("今日", systemImage: "checkmark.circle", value: .today, shortcut: "⌘1")
+            destinationRow("重复规则", systemImage: "repeat", value: .rules, shortcut: "⌘2")
+            destinationRow("历史记录", systemImage: "clock.arrow.circlepath", value: .history, shortcut: "⌘3")
+            destinationRow("备忘录", systemImage: "note.text", value: .memo, shortcut: "⌘4")
 
             Spacer(minLength: 12)
 
-            destinationRow("设置", systemImage: "gearshape", value: .settings)
+            destinationRow("设置", systemImage: "gearshape", value: .settings, shortcut: "⌘5")
 
             SidebarTodayCard(model: model)
                 .padding(.top, 10)
         }
+        .fluidTooltipScope(leadingInset: 29, height: 28)
         .padding(.horizontal, 8)
-        .padding(.top, 8)
+        .padding(.top, 36)
+        .padding(.bottom, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationTitle("Daily")
         .frame(minWidth: 190, idealWidth: 220)
-        .glassEffect(Glass.regular, in: Rectangle())
+        .background {
+            sidebarBackground
+                .ignoresSafeArea()
+        }
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: 0.28),
+            value: wallpaperPalette
+        )
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("主导航")
+    }
+
+    @ViewBuilder
+    private var sidebarBackground: some View {
+        if reduceTransparency {
+            Color(nsColor: .windowBackgroundColor)
+        } else {
+            ZStack {
+                Color(nsColor: .windowBackgroundColor)
+                Rectangle().fill(.regularMaterial)
+            }
+        }
     }
 
     private func destinationRow(
         _ title: String,
         systemImage: String,
-        value: AppModel.Destination
+        value: AppModel.Destination,
+        shortcut: String
     ) -> some View {
         let isSelected = model.destination == value
         let isHovered = hoveredDestination == value
@@ -40,7 +71,7 @@ struct SidebarView: View {
             HStack(spacing: 8) {
                 Image(systemName: systemImage)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                    .foregroundStyle(isSelected ? ColorTokens.accent : Color.secondary)
                     .frame(width: 18)
 
                 Text(title)
@@ -52,19 +83,30 @@ struct SidebarView: View {
             .padding(.horizontal, 9)
             .frame(height: 30)
             .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .background {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(
-                        isSelected
-                            ? ColorTokens.accent.opacity(0.10)
-                            : Color.primary.opacity(isHovered ? 0.05 : 0)
-                    )
-            }
         }
         .buttonStyle(.plain)
-        .onHover { isHovered in
-            hoveredDestination = isHovered ? value : nil
+        .focused($focusedDestination, equals: value)
+        .onHover { hovering in
+            if hovering {
+                hoveredDestination = value
+            } else if hoveredDestination == value {
+                hoveredDestination = nil
+            }
         }
+        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .home, .end]) { press in
+            switch press.key {
+            case .home:
+                focusedDestination = destinations.first
+            case .end:
+                focusedDestination = destinations.last
+            default:
+                guard let index = destinations.firstIndex(of: value) else { return .ignored }
+                let step = press.key == .upArrow || press.key == .leftArrow ? -1 : 1
+                focusedDestination = destinations[(index + step + destinations.count) % destinations.count]
+            }
+            return .handled
+        }
+        .fluidTooltip(title, shortcut: shortcut, isHovered: isHovered, isFocused: focusedDestination == value)
         .accessibilityLabel(title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
@@ -89,9 +131,12 @@ private struct SidebarTodayCard: View {
                 HStack(spacing: 10) {
                     ProgressRing(
                         fraction: fraction,
-                        size: 28,
+                        size: 24,
                         lineWidth: 4,
-                        showsLabel: false
+                        tint: ColorTokens.accent,
+                        showsLabel: false,
+                        completed: model.completedCount,
+                        total: model.todayTasks.count
                     )
 
                     VStack(alignment: .leading, spacing: 1) {
@@ -109,8 +154,16 @@ private struct SidebarTodayCard: View {
             }
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .glassModule(interactive: false, cornerRadius: 13)
+        .padding(.vertical, 6)
+        .glassModule(
+            interactive: false,
+            cornerRadius: 12
+        )
+        .shadow(
+            color: .black.opacity(0.10),
+            radius: 8,
+            y: 3
+        )
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             model.todayTasks.isEmpty

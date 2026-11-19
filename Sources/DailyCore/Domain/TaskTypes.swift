@@ -5,6 +5,12 @@ public enum TaskKind: String, Codable, Sendable {
     case recurring
 }
 
+public enum TaskPriority: String, Codable, Sendable, CaseIterable {
+    case low
+    case medium
+    case high
+}
+
 public enum ReminderMode: String, Codable, Sendable {
     case none
     case once
@@ -59,14 +65,22 @@ public struct RecurrenceRule: Codable, Equatable, Sendable {
         case .selectedWeekdays:
             return weekdays.contains(weekday)
         case .monthly:
-            let dom = calendar.component(.day, from: day.date(in: calendar))
-            let target = dayOfMonth ?? 1
-            guard let range = calendar.range(of: .day, in: .month, for: day.date(in: calendar)) else {
-                return dom == target
-            }
-            let effective = min(target, range.last ?? 31)
-            return dom == effective
+            let date = day.date(in: calendar)
+            let monthEnd = calendar.range(of: .day, in: .month, for: date)?.last ?? 31
+            let target = min(dayOfMonth ?? monthEnd, monthEnd)
+            return calendar.component(.day, from: date) == target
         }
+    }
+
+    func firstOccurrence(onOrAfter day: LocalDay, calendar: Calendar) -> LocalDay? {
+        let start = max(day, startDay)
+        for offset in 0...370 {
+            let candidate = start.adding(days: offset, calendar: calendar)
+            if matches(candidate, calendar: calendar) {
+                return candidate
+            }
+        }
+        return nil
     }
 }
 
@@ -78,6 +92,8 @@ public struct TaskDraft: Sendable {
     public var reminderMode: ReminderMode
     public var reminderHour: Int?
     public var reminderMinute: Int?
+    public var priority: TaskPriority?
+    public var assignee: String?
 
     public init(
         title: String,
@@ -86,7 +102,9 @@ public struct TaskDraft: Sendable {
         scheduledDay: LocalDay? = nil,
         reminderMode: ReminderMode = .none,
         reminderHour: Int? = nil,
-        reminderMinute: Int? = nil
+        reminderMinute: Int? = nil,
+        priority: TaskPriority? = nil,
+        assignee: String? = nil
     ) {
         self.title = title
         self.kind = kind
@@ -95,6 +113,8 @@ public struct TaskDraft: Sendable {
         self.reminderMode = reminderMode
         self.reminderHour = reminderHour
         self.reminderMinute = reminderMinute
+        self.priority = priority
+        self.assignee = assignee
     }
 }
 
@@ -104,19 +124,25 @@ public struct InstanceDraft: Sendable {
     public var reminderMode: ReminderMode
     public var reminderHour: Int?
     public var reminderMinute: Int?
+    public var priority: TaskPriority?
+    public var assignee: String?
 
     public init(
         title: String,
         scheduledDay: LocalDay? = nil,
         reminderMode: ReminderMode = .none,
         reminderHour: Int? = nil,
-        reminderMinute: Int? = nil
+        reminderMinute: Int? = nil,
+        priority: TaskPriority? = nil,
+        assignee: String? = nil
     ) {
         self.title = title
         self.scheduledDay = scheduledDay
         self.reminderMode = reminderMode
         self.reminderHour = reminderHour
         self.reminderMinute = reminderMinute
+        self.priority = priority
+        self.assignee = assignee
     }
 }
 

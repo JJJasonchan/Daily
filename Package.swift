@@ -9,7 +9,8 @@ let package = Package(
         .executable(name: "Daily", targets: ["DailyApp"])
     ],
     dependencies: [
-        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0")
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
+        .package(url: "https://github.com/gonzalezreal/textual", from: "0.5.0")
     ],
     targets: [
         .target(name: "DailyCore"),
@@ -17,7 +18,8 @@ let package = Package(
             name: "DailyApp",
             dependencies: [
                 "DailyCore",
-                .product(name: "Sparkle", package: "Sparkle")
+                .product(name: "Sparkle", package: "Sparkle"),
+                .product(name: "Textual", package: "textual")
             ],
             exclude: ["Resources"]
         ),

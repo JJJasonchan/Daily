@@ -14,6 +14,8 @@ public final class TaskTemplate {
     public var isEnabled: Bool
     public var createdAt: Date
     public var updatedAt: Date
+    private var priorityRaw: String?
+    public var assignee: String?
 
     public init(
         id: UUID = UUID(),
@@ -26,7 +28,9 @@ public final class TaskTemplate {
         sortIndex: Int = 0,
         isEnabled: Bool = true,
         createdAt: Date = .now,
-        updatedAt: Date = .now
+        updatedAt: Date = .now,
+        priority: TaskPriority? = nil,
+        assignee: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -39,6 +43,8 @@ public final class TaskTemplate {
         self.isEnabled = isEnabled
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.priorityRaw = priority?.rawValue
+        self.assignee = assignee
     }
 
     public var kind: TaskKind {
@@ -54,5 +60,10 @@ public final class TaskTemplate {
     public var reminderMode: ReminderMode {
         get { ReminderMode(rawValue: reminderModeRaw)! }
         set { reminderModeRaw = newValue.rawValue }
+    }
+
+    public var priority: TaskPriority? {
+        get { priorityRaw.flatMap(TaskPriority.init(rawValue:)) }
+        set { priorityRaw = newValue?.rawValue }
     }
 }
